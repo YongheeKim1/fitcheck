@@ -1,10 +1,12 @@
 // 앱 파일을 캐시해 오프라인에서도 열리게 한다.
 // 파일을 수정했으면 CACHE 버전을 올려야 사용자 기기에 새 버전이 반영된다.
-const CACHE = 'fitcheck-v1';
+const CACHE = 'fitcheck-v3';
 const ASSETS = [
   './',
   'index.html',
   'styles.css',
+  'parse.js',
+  'body.js',
   'app.js',
   'manifest.webmanifest',
   'icons/icon.svg',
@@ -27,6 +29,8 @@ self.addEventListener('activate', (e) => {
 // 네트워크 우선, 실패하면 캐시 (개발 중 수정 사항이 바로 보이도록)
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  // 외부(CDN) 요청은 건드리지 않는다: OCR 언어 데이터는 Tesseract가 IndexedDB에 따로 캐시한다
+  if (new URL(e.request.url).origin !== self.location.origin) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {

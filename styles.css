@@ -117,7 +117,7 @@ button.block { width: 100%; }
 .size-table td { padding: 3px; }
 .size-table input { min-width: 56px; padding: 8px 6px; }
 .size-table td:first-child input { min-width: 50px; }
-.size-table .del { padding: 6px 10px; border: none; color: var(--muted); }
+.size-table .del { padding: 6px 8px; border: none; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
 
 .list { list-style: none; margin: 0 0 12px; padding: 0; }
 .list li {
@@ -149,7 +149,7 @@ button.block { width: 100%; }
 .size-tabs { display: flex; gap: 6px; overflow-x: auto; margin: 8px 0 12px; }
 .size-tabs button { padding: 6px 12px; font-size: 14px; flex-shrink: 0; }
 .size-tabs button.active { background: var(--text); color: var(--card); border-color: var(--text); }
-.size-tabs button .star { color: var(--warn); }
+.size-tabs button .star { color: var(--warn); font-size: 12px; font-weight: 700; }
 
 .summary { font-size: 15px; margin: 0 0 12px; }
 .diff-table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -185,3 +185,41 @@ button.block { width: 100%; }
   font-weight: 500;
 }
 .bottom-nav button.active { color: var(--primary); font-weight: 700; }
+
+.import-box { margin: 4px 0 10px; }
+.import-box textarea {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 ui-monospace, Consolas, monospace;
+  resize: vertical;
+  white-space: pre;
+  overflow-x: auto;
+}
+.chart-preview { display: block; max-width: 100%; max-height: 220px; margin: 10px auto 0; border-radius: 8px; border: 1px solid var(--line); }
+.import-status { margin: 8px 0; white-space: pre-line; }
+.import-status.ok { color: var(--ok); }
+.import-status.err { color: var(--bad); }
+.progress { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 8px; }
+.progress > div { height: 100%; background: var(--primary); width: 0; transition: width .2s; }
+
+.photo-guide { margin: 0 0 12px; font-size: 14px; }
+.photo-guide summary { cursor: pointer; color: var(--primary); }
+.photo-guide ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+.photo-pick { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; font-size: 14px; }
+.photo-pick .pick-name { font-size: 12px; font-weight: 400; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.photo-pick.picked { border-color: var(--primary); }
+
+.analysis-canvas { display: block; width: 100%; max-width: 420px; margin: 0 auto 12px; border-radius: 10px; }
+.heads-big { text-align: center; margin: 4px 0 2px; font-size: 40px; font-weight: 800; line-height: 1.1; }
+.heads-big small { font-size: 18px; font-weight: 600; }
+.heads-sub { text-align: center; color: var(--muted); font-size: 14px; margin: 0 0 14px; }
+.shape-box { margin: 14px 0; padding: 12px; border-radius: 10px; background: var(--bg); }
+.shape-box b { font-size: 16px; }
+.shape-box p { margin: 4px 0 0; font-size: 14px; }
+.shape-box .tip { color: var(--muted); }
+.warn-list { margin: 10px 0 0; padding-left: 18px; color: var(--warn); font-size: 13px; }

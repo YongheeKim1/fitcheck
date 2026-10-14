@@ -38,6 +38,20 @@
             </select>
           </label>
         </div>
+        <div class="import-box">
+          <div class="btn-row">
+            <label class="ghost file-btn">이미지로 가져오기
+              <input type="file" id="chart-image" accept="image/*" hidden>
+            </label>
+            <button type="button" class="ghost" id="toggle-paste">텍스트 붙여넣기</button>
+          </div>
+          <div id="paste-box" class="hidden">
+            <img id="chart-preview" class="chart-preview hidden" alt="가져온 사이즈표 이미지">
+            <textarea id="chart-text" rows="6" wrap="off" placeholder="쇼핑몰 사이즈표를 복사해서 붙여넣으세요.&#10;이미지를 붙여넣어도 돼요."></textarea>
+            <p class="hint import-status" id="import-status"></p>
+            <button type="button" class="ghost block" id="apply-chart">이 내용으로 다시 적용</button>
+          </div>
+        </div>
         <div class="table-wrap">
           <table class="size-table" id="size-table">
             <thead><tr id="size-head"></tr></thead>
@@ -111,6 +125,37 @@
 
     <!-- 내 정보 -->
     <section id="tab-body" class="tab">
+      <div class="card">
+        <h2>사진으로 체형 분석</h2>
+        <p class="hint">키를 기준으로 전신 사진에서 등신과 몸 비율을 계산해요. 사진은 이 기기 안에서만 분석하고 저장하지 않아요.</p>
+        <details class="photo-guide">
+          <summary>잘 나오게 찍는 법</summary>
+          <ul>
+            <li>머리부터 발끝까지 다 나오게, 정면으로 똑바로 서기</li>
+            <li>몸에 붙는 옷, 맨발이나 양말</li>
+            <li>팔은 몸에서 살짝 떼고, 다리는 어깨너비로 벌리기</li>
+            <li>카메라는 허리 높이에서 2~3m 떨어져 수평으로</li>
+          </ul>
+        </details>
+        <label class="field">키 (cm)
+          <input type="number" inputmode="decimal" step="0.1" id="an-height" placeholder="예: 175">
+        </label>
+        <div class="row2">
+          <label class="ghost file-btn photo-pick">정면 사진 (필수)
+            <input type="file" id="front-photo" accept="image/*" hidden>
+            <span class="pick-name" id="front-name">선택 안 함</span>
+          </label>
+          <label class="ghost file-btn photo-pick">옆모습 (선택)
+            <input type="file" id="side-photo" accept="image/*" hidden>
+            <span class="pick-name" id="side-name">둘레가 더 정확해져요</span>
+          </label>
+        </div>
+        <button type="button" class="primary block" id="run-analysis">분석하기</button>
+        <p class="hint import-status" id="analysis-status"></p>
+      </div>
+
+      <div id="analysis-result" class="card hidden"></div>
+
       <form id="body-form" class="card">
         <h2>내 체형</h2>
         <p class="hint">줄자로 잰 <b>둘레(cm)</b>를 입력하면 옷과 몸 사이 여유분도 같이 보여 줘요. 비워 둬도 돼요.</p>
@@ -138,6 +183,8 @@
     <button type="button" data-tab="body">내 체형</button>
   </nav>
 
+  <script src="parse.js"></script>
+  <script src="body.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

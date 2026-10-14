@@ -93,6 +93,7 @@ function renderBodyForm() {
     <label class="field">${f.label}
       <input type="number" inputmode="decimal" step="0.1" name="${f.key}" value="${state.body[f.key] ?? ''}">
     </label>`).join('');
+  $('#an-height').value = state.body.height ?? '';
 }
 
 $('#body-form').addEventListener('submit', (e) => {
@@ -204,7 +205,7 @@ function renderSizeTable() {
     <tr>
       <td><input type="text" data-row="${i}" data-key="size" value="${esc(r.size ?? '')}"></td>
       ${PARTS.map((pt) => `<td><input type="number" inputmode="decimal" step="0.1" data-row="${i}" data-key="${pt.key}" value="${r[pt.key] ?? ''}"></td>`).join('')}
-      <td><button type="button" class="del" data-delrow="${i}" aria-label="행 삭제">✕</button></td>
+      <td><button type="button" class="del" data-delrow="${i}" aria-label="행 삭제">삭제</button></td>
     </tr>`).join('');
   $('#new-name').value = state.draft.name;
   $('#new-stretch').value = state.draft.stretch;
@@ -251,6 +252,147 @@ function renderRefSelect() {
   state.draft.refId = ref.id;
   sel.innerHTML = state.closet.map((p) =>
     `<option value="${p.id}" ${p.id === ref.id ? 'selected' : ''}>${esc(p.name)}${p.size ? ` (${esc(p.size)})` : ''} · ${FEEL_LABEL[p.feel]}</option>`).join('');
+}
+
+// ---------- 사이즈표 가져오기 (텍스트 / 이미지 OCR) ----------
+const TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+let ocrWorker = null;
+let ocrProgress = () => {};
+let previewUrl = null;
+
+function setImportStatus(text, kind = '') {
+  const el = $('#import-status');
+  el.className = 'hint import-status ' + kind;
+  el.innerHTML = text;
+}
+
+function openPasteBox() {
+  $('#paste-box').classList.remove('hidden');
+}
+
+$('#toggle-paste').addEventListener('click', () => {
+  const box = $('#paste-box');
+  box.classList.toggle('hidden');
+  if (!box.classList.contains('hidden')) $('#chart-text').focus();
+});
+
+function applyChartText(text) {
+  const { rows, parts, warnings } = parseSizeChart(text);
+  if (!rows.length) {
+    setImportStatus(esc(warnings.join('\n')), 'err');
+    return false;
+  }
+  state.draft.rows = rows;
+  saveState();
+  renderSizeTable();
+  const sizes = rows.map((r) => r.size || '?').join('·');
+  const msg = [`${rows.length}개 사이즈(${sizes}) · ${parts.join(', ')} 인식했어요. 아래 표에서 숫자를 확인해 주세요.`, ...warnings];
+  setImportStatus(esc(msg.join('\n')), warnings.length ? '' : 'ok');
+  return true;
+}
+
+$('#apply-chart').addEventListener('click', () => applyChartText($('#chart-text').value));
+
+$('#chart-text').addEventListener('paste', (e) => {
+  const img = [...(e.clipboardData?.items || [])].find((it) => it.type.startsWith('image/'));
+  if (img) {
+    e.preventDefault();
+    importImage(img.getAsFile());
+    return;
+  }
+  // 붙여넣은 내용이 textarea에 들어간 뒤 바로 적용
+  setTimeout(() => applyChartText($('#chart-text').value), 0);
+});
+
+$('#chart-image').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (file) importImage(file);
+});
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('script load failed'));
+    document.head.appendChild(s);
+  });
+}
+
+async function getOcrWorker() {
+  if (!window.Tesseract) await loadScript(TESSERACT_URL);
+  if (!ocrWorker) {
+    ocrWorker = await Tesseract.createWorker(['kor', 'eng'], 1, { logger: (m) => ocrProgress(m) });
+    await ocrWorker.setParameters({
+      tessedit_pageseg_mode: '6',      // 하나의 텍스트 블록: 표의 줄 구조를 유지
+      preserve_interword_spaces: '1',
+    });
+  }
+  return ocrWorker;
+}
+
+// 작은 스크린샷은 키우고, 흑백으로 바꾸고, 다크모드 스크린샷은 반전해서 인식률을 높인다
+async function prepareImage(file) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(3, Math.max(1, 1800 / bmp.width));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bmp.width * scale);
+  canvas.height = Math.round(bmp.height * scale);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data;
+  let sum = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    d[i] = d[i + 1] = d[i + 2] = g;
+    sum += g;
+  }
+  if (sum / (d.length / 4) < 110) {
+    for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = 255 - d[i];
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+async function importImage(file) {
+  openPasteBox();
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = URL.createObjectURL(file);
+  const preview = $('#chart-preview');
+  preview.src = previewUrl;
+  preview.classList.remove('hidden');
+
+  const first = !ocrWorker;
+  setImportStatus(`${first ? '글자 인식 엔진 불러오는 중… (처음 한 번만, 몇 MB)' : '글자 인식 중…'}<div class="progress"><div></div></div>`);
+  const bar = () => $('#import-status .progress > div');
+  ocrProgress = (m) => {
+    if (bar() && typeof m.progress === 'number') {
+      // 엔진/언어 로딩은 앞 40%, 실제 인식은 뒤 60%
+      const p = m.status === 'recognizing text' ? 40 + m.progress * 60 : m.progress * 40;
+      bar().style.width = `${Math.round(p)}%`;
+    }
+  };
+
+  try {
+    const worker = await getOcrWorker();
+    const canvas = await prepareImage(file);
+    const { data } = await worker.recognize(canvas);
+    // 보기 좋게: 긴 공백은 두 칸으로, 빈 줄은 제거
+    $('#chart-text').value = data.text.replace(/[ \t]{2,}/g, '  ').replace(/\n{2,}/g, '\n').trim();
+    if (!applyChartText(data.text)) {
+      setImportStatus(esc('표를 읽지 못했어요. 사이즈표 부분만 잘라서 다시 올리거나, 아래 인식된 글자를 고친 뒤 "다시 적용"을 눌러 주세요.'), 'err');
+    }
+  } catch (err) {
+    console.error(err);
+    setImportStatus(esc(navigator.onLine
+      ? '이미지를 읽는 중 문제가 생겼어요. 다시 시도해 주세요.'
+      : '처음 이미지 인식에는 인터넷 연결이 필요해요.'), 'err');
+  } finally {
+    ocrProgress = () => {};
+  }
 }
 
 // ---------- 핏 계산 ----------
@@ -353,11 +495,11 @@ function renderResult() {
   const tabs = results.length > 1 ? `
     <div class="size-tabs">
       ${results.map((r, i) => `<button type="button" data-pick="${i}" class="${r === selected ? 'active' : ''}">
-        ${r === best ? '<span class="star">★</span> ' : ''}${esc(r.row.size || `#${i + 1}`)}</button>`).join('')}
+        ${r === best ? '<span class="star">추천</span> ' : ''}${esc(r.row.size || `#${i + 1}`)}</button>`).join('')}
     </div>` : '';
 
   const rec = results.length > 1
-    ? `<p class="hint">★ 추천: <b>${esc(best.row.size || '')}</b> — 기준 바지와 가장 비슷한 사이즈예요.</p>` : '';
+    ? `<p class="hint">추천 사이즈: <b>${esc(best.row.size || '')}</b> — 기준 바지와 가장 비슷한 사이즈예요.</p>` : '';
 
   const rowsHtml = selected.parts.map((p) => `
     <tr>
@@ -448,6 +590,253 @@ function renderSilhouette(row, ref, body) {
     </div>`;
 }
 
+// ---------- 사진 체형 분석 (MediaPipe) ----------
+const MP_VER = '0.10.14';
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}`;
+const POSE_MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
+const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+let mp = null; // { pose, face }
+const photos = { front: null, side: null };
+
+function setAnalysisStatus(text, kind = '') {
+  const el = $('#analysis-status');
+  el.className = 'hint import-status ' + kind;
+  el.innerHTML = text;
+}
+
+for (const which of ['front', 'side']) {
+  $(`#${which}-photo`).addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    photos[which] = file;
+    $(`#${which}-name`).textContent = file.name;
+    e.target.closest('label').classList.add('picked');
+  });
+}
+
+async function loadMediaPipe() {
+  if (mp) return mp;
+  const vision = await import(`${MP_URL}/vision_bundle.mjs`);
+  const fileset = await vision.FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
+  // GPU가 안 되는 기기는 CPU로
+  const create = async (Task, options) => {
+    try {
+      return await Task.createFromOptions(fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: 'GPU' } });
+    } catch {
+      return Task.createFromOptions(fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: 'CPU' } });
+    }
+  };
+  const pose = await create(vision.PoseLandmarker, {
+    baseOptions: { modelAssetPath: POSE_MODEL },
+    runningMode: 'IMAGE',
+    numPoses: 1,
+    outputSegmentationMasks: true,
+  });
+  const face = await create(vision.FaceLandmarker, {
+    baseOptions: { modelAssetPath: FACE_MODEL },
+    runningMode: 'IMAGE',
+    numFaces: 1,
+  });
+  mp = { pose, face };
+  return mp;
+}
+
+// 사진 방향(EXIF)을 반영해 그리고, 너무 크면 줄인다
+async function photoToCanvas(file, maxSide = 1280) {
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * s);
+  c.height = Math.round(bmp.height * s);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return c;
+}
+
+function detectPose(canvas) {
+  const res = mp.pose.detect(canvas);
+  const pose = res.landmarks?.[0];
+  const m = res.segmentationMasks?.[0];
+  if (!pose || !m) return null;
+  const mask = { data: Float32Array.from(m.getAsFloat32Array()), width: m.width, height: m.height };
+  res.segmentationMasks.forEach((x) => x.close());
+  return { pose, mask };
+}
+
+// 전신 사진에서는 얼굴이 작아 잘 안 잡히므로, 머리 주변만 잘라 키워서 찾는다
+function detectFace(canvas, pose) {
+  const W = canvas.width, H = canvas.height;
+  const sw = Math.abs(pose[11].x - pose[12].x) * W;
+  const size = Math.max(sw * 1.1, 80);
+  const x0 = pose[0].x * W - size / 2;
+  const y0 = pose[0].y * H - size / 2;
+  const crop = document.createElement('canvas');
+  crop.width = crop.height = 512;
+  crop.getContext('2d').drawImage(canvas, x0, y0, size, size, 0, 0, 512, 512);
+  const lm = mp.face.detect(crop).faceLandmarks?.[0];
+  if (!lm) return null;
+  return lm.map((p) => ({ x: (x0 + p.x * size) / W, y: (y0 + p.y * size) / H }));
+}
+
+$('#run-analysis').addEventListener('click', async () => {
+  const heightCm = num($('#an-height').value);
+  if (!heightCm || heightCm < 100 || heightCm > 230) {
+    setAnalysisStatus('키를 cm로 입력해 주세요.', 'err');
+    return;
+  }
+  if (!photos.front) {
+    setAnalysisStatus('정면 전신 사진을 골라 주세요.', 'err');
+    return;
+  }
+  state.body.height = heightCm;
+  saveState();
+  renderBodyForm();
+
+  const btn = $('#run-analysis');
+  btn.disabled = true;
+  try {
+    setAnalysisStatus(mp ? '분석 중…' : '체형 인식 모델 불러오는 중… (처음 한 번만, 약 15MB)');
+    await loadMediaPipe();
+    setAnalysisStatus('분석 중…');
+
+    const frontCanvas = await photoToCanvas(photos.front);
+    const det = detectPose(frontCanvas);
+    if (!det) throw new Error('사진에서 사람을 찾지 못했어요. 전신이 나온 사진인지 확인해 주세요.');
+    const face = detectFace(frontCanvas, det.pose);
+    const front = BodyAnalysis.analyzeFront({ mask: det.mask, pose: det.pose, face, heightCm });
+
+    let sideDepth = null;
+    if (photos.side) {
+      const sideCanvas = await photoToCanvas(photos.side);
+      const sideDet = detectPose(sideCanvas);
+      if (sideDet) sideDepth = BodyAnalysis.analyzeSide({ mask: sideDet.mask, heightCm, levels: front.levels });
+      else front.warnings.push('옆모습 사진에서 사람을 찾지 못해 둘레는 일반 비율로 추정했어요.');
+    }
+
+    const girths = BodyAnalysis.estimateGirths(front, sideDepth);
+    const shape = BodyAnalysis.bodyShape(front);
+    const { draw, levels, ...numbers } = front;
+    state.bodyAnalysis = { date: new Date().toISOString().slice(0, 10), ...numbers, girths, shape };
+    saveState();
+
+    setAnalysisStatus('');
+    renderAnalysis(state.bodyAnalysis, frontCanvas, draw);
+    $('#analysis-result').scrollIntoView({ behavior: 'smooth' });
+  } catch (err) {
+    console.error(err);
+    const msg = err.message && /[가-힣]/.test(err.message) ? err.message
+      : navigator.onLine ? '분석 중 문제가 생겼어요. 다른 사진으로 다시 시도해 주세요.' : '처음 분석에는 인터넷 연결이 필요해요.';
+    setAnalysisStatus(esc(msg), 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function describeHeads(h) {
+  if (h < 6.5) return '머리가 큰 편인 아담한 비율';
+  if (h < 7.2) return '일반적인 성인 비율';
+  if (h < 7.8) return '평균보다 머리가 작고 키가 길어 보이는 비율';
+  return '모델에 가까운 비율';
+}
+
+function describeLegs(inseam, height) {
+  const r = inseam / height;
+  if (r >= 0.47) return '다리가 긴 편';
+  if (r <= 0.43) return '상체가 긴 편';
+  return '상하체 균형이 보통';
+}
+
+// 사진 위에 등신 눈금과 측정선을 그린다
+function drawOverlay(src, d) {
+  const c = document.createElement('canvas');
+  c.width = src.width;
+  c.height = src.height;
+  c.className = 'analysis-canvas';
+  const g = c.getContext('2d');
+  g.drawImage(src, 0, 0);
+  const sx = src.width / d.maskW, sy = src.height / d.maskH;
+  const lw = Math.max(2, src.width / 300);
+  const font = Math.max(12, src.width / 40);
+
+  // 등신 눈금(머리 길이 간격)
+  g.font = `bold ${font}px sans-serif`;
+  g.textBaseline = 'middle';
+  let i = 0;
+  for (let y = d.headTop; y <= d.bottomY + 1; y += d.headLen, i++) {
+    g.strokeStyle = 'rgba(37,99,235,0.55)';
+    g.lineWidth = lw * 0.6;
+    g.setLineDash([lw * 3, lw * 2]);
+    g.beginPath();
+    g.moveTo(0, y * sy);
+    g.lineTo(c.width, y * sy);
+    g.stroke();
+    if (i > 0) {
+      g.fillStyle = '#2563eb';
+      g.fillText(String(i), lw * 2, (y - d.headLen / 2) * sy);
+    }
+  }
+  g.setLineDash([]);
+
+  // 측정선
+  const colors = { 어깨: '#f59e0b', 허리: '#ef4444', 엉덩이: '#8b5cf6', 허벅지: '#10b981' };
+  for (const line of d.lines) {
+    g.strokeStyle = colors[line.key];
+    g.lineWidth = lw * 1.5;
+    g.beginPath();
+    g.moveTo(line.l * sx, line.y * sy);
+    g.lineTo(line.r * sx, line.y * sy);
+    g.stroke();
+  }
+  // 가랑이 점
+  g.fillStyle = '#10b981';
+  g.beginPath();
+  g.arc(d.crotchX * sx, d.crotchY * sy, lw * 2.5, 0, Math.PI * 2);
+  g.fill();
+  return c;
+}
+
+function renderAnalysis(a, canvas, draw) {
+  const box = $('#analysis-result');
+  box.classList.remove('hidden');
+  const g = a.girths || {};
+  const row = (label, value, note = '') => (value == null ? '' : `
+    <tr><td>${label}</td><td class="num">${value}</td><td class="hint" style="margin:0">${note}</td></tr>`);
+
+  box.innerHTML = `
+    <h2>체형 분석 결과 <span class="hint" style="font-weight:400">(${esc(a.date)} · 키 ${fmt(a.heightCm)}cm)</span></h2>
+    <div id="analysis-canvas-slot"></div>
+    <p class="heads-big">${fmt(a.heads)}<small>등신</small></p>
+    <p class="heads-sub">머리 길이 ${fmt(a.headCm)}cm · ${describeHeads(a.heads)}</p>
+    <table class="diff-table">
+      <thead><tr><th>항목</th><th>값</th><th></th></tr></thead>
+      <tbody>
+        ${row('어깨 폭', a.shoulderCm != null ? `${fmt(a.shoulderCm)}cm` : null, '정면 겉 실루엣')}
+        ${row('허리 둘레', g.waist != null ? `약 ${g.waist}cm` : null, `정면 폭 ${fmt(a.waistWidthCm)}cm`)}
+        ${row('엉덩이 둘레', g.hip != null ? `약 ${g.hip}cm` : null, `정면 폭 ${fmt(a.hipWidthCm)}cm`)}
+        ${row('허벅지 둘레', g.thigh != null ? `약 ${g.thigh}cm` : null, a.thighWidthCm != null ? `정면 폭 ${fmt(a.thighWidthCm)}cm` : '')}
+        ${row('다리 안쪽 길이', a.inseamCm != null ? `${fmt(a.inseamCm)}cm` : null, `${describeLegs(a.inseamCm, a.heightCm)}${a.crotchEstimated ? ' (추정)' : ''}`)}
+        ${row('상체 : 하체', `${a.upperLowerRatio} : 1`, '정수리~가랑이 : 가랑이~발')}
+      </tbody>
+    </table>
+    <p class="hint" style="margin-top:8px">둘레는 ${g.fromSide ? '정면 폭과 옆모습 두께로' : '정면 폭과 일반적인 몸 두께 비율로'} 계산한 추정치예요(±5cm 정도 오차). 줄자로 잰 값이 더 정확해요.</p>
+    ${a.shape ? `<div class="shape-box"><b>${esc(a.shape.name)}</b><p>${esc(a.shape.desc)}</p><p class="tip">바지 고를 때: ${esc(a.shape.tip)}</p></div>` : ''}
+    ${a.warnings?.length ? `<ul class="warn-list">${a.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+    <button type="button" class="primary block" id="apply-analysis" style="margin-top:12px">추정치를 내 체형에 채우기</button>
+  `;
+  if (canvas && draw) $('#analysis-canvas-slot').appendChild(drawOverlay(canvas, draw));
+}
+
+$('#analysis-result').addEventListener('click', (e) => {
+  if (e.target.id !== 'apply-analysis') return;
+  const a = state.bodyAnalysis;
+  const est = { waist: a.girths?.waist, hip: a.girths?.hip, thigh: a.girths?.thigh, inseam: a.inseamCm };
+  const filled = Object.keys(est).filter((k) => state.body[k] != null && est[k] != null);
+  if (filled.length && !confirm('이미 입력한 치수가 있어요. 사진 추정치로 바꿀까요?\n(줄자로 잰 값이 더 정확해요)')) return;
+  for (const [k, v] of Object.entries(est)) if (v != null) state.body[k] = v;
+  saveState();
+  renderBodyForm();
+  $('#body-form').scrollIntoView({ behavior: 'smooth' });
+});
+
 // ---------- 백업 ----------
 $('#export-btn').addEventListener('click', () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -465,7 +854,7 @@ $('#import-file').addEventListener('change', async (e) => {
     const data = JSON.parse(await file.text());
     if (!Array.isArray(data.closet) || typeof data.body !== 'object') throw new Error('형식 오류');
     if (!confirm('지금 데이터를 백업 파일로 덮어쓸까요?')) return;
-    Object.assign(state, { body: data.body, closet: data.closet, draft: data.draft || defaultDraft() });
+    Object.assign(state, { body: data.body, closet: data.closet, draft: data.draft || defaultDraft(), bodyAnalysis: data.bodyAnalysis || null });
     saveState();
     renderAll();
     alert('가져왔어요.');
@@ -482,6 +871,8 @@ function renderAll() {
   renderCloset();
   renderSizeTable();
   renderRefSelect();
+  if (state.bodyAnalysis) renderAnalysis(state.bodyAnalysis);
+  else $('#analysis-result').classList.add('hidden');
 }
 renderAll();
 
