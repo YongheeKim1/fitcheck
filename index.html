@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f2937">
+  <meta name="description" content="내 바지와 새 바지의 실측을 비교해 핏을 미리 예측하는 앱">
+  <title>핏체크</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>핏체크</h1>
+    <span class="sub">바지 핏 예측</span>
+  </header>
+
+  <main>
+    <!-- 핏 비교 -->
+    <section id="tab-compare" class="tab active">
+      <div class="card">
+        <h2>새 바지 실측 입력</h2>
+        <p class="hint">쇼핑몰 실측표를 그대로 옮겨 주세요. 모든 둘레는 <b>단면(cm)</b> 기준이에요.</p>
+        <label class="field">비교 기준 (내 바지)
+          <select id="ref-select"></select>
+        </label>
+        <div class="row2">
+          <label class="field">상품명
+            <input id="new-name" type="text" placeholder="예: 와이드 데님">
+          </label>
+          <label class="field">신축성
+            <select id="new-stretch">
+              <option value="none">없음</option>
+              <option value="some">약간</option>
+              <option value="high">많음</option>
+            </select>
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table class="size-table" id="size-table">
+            <thead><tr id="size-head"></tr></thead>
+            <tbody id="size-body"></tbody>
+          </table>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="ghost" id="add-size">+ 사이즈 행 추가</button>
+          <button type="button" class="primary" id="run-compare">비교하기</button>
+        </div>
+      </div>
+
+      <div id="result" class="card hidden"></div>
+    </section>
+
+    <!-- 내 바지 -->
+    <section id="tab-closet" class="tab">
+      <div class="card">
+        <h2>잘 맞는 내 바지</h2>
+        <p class="hint">갖고 있는 바지를 눕혀서 재 주세요. 측정 방법은 맨 아래에 있어요.</p>
+        <ul id="closet-list" class="list"></ul>
+        <button type="button" class="primary block" id="add-pants">+ 내 바지 추가</button>
+      </div>
+
+      <form id="pants-form" class="card hidden">
+        <h2 id="pants-form-title">내 바지 추가</h2>
+        <input type="hidden" id="p-id">
+        <div class="row2">
+          <label class="field">이름
+            <input id="p-name" type="text" required placeholder="예: 리바이스 511">
+          </label>
+          <label class="field">사이즈
+            <input id="p-size" type="text" placeholder="예: 30">
+          </label>
+        </div>
+        <div class="grid3" id="p-measures"></div>
+        <div class="row2">
+          <label class="field">신축성
+            <select id="p-stretch">
+              <option value="none">없음</option>
+              <option value="some">약간</option>
+              <option value="high">많음</option>
+            </select>
+          </label>
+          <label class="field">입었을 때 느낌
+            <select id="p-feel">
+              <option value="good">딱 좋음</option>
+              <option value="tight">조금 낌</option>
+              <option value="loose">조금 큼</option>
+            </select>
+          </label>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="ghost" id="cancel-pants">취소</button>
+          <button type="submit" class="primary">저장</button>
+        </div>
+      </form>
+
+      <details class="card guide">
+        <summary>바지 재는 법</summary>
+        <ul>
+          <li><b>허리</b>: 허리 밴드 양끝 직선 길이 (단면)</li>
+          <li><b>엉덩이</b>: 밑위 끝에서 약 5cm 위 가로 길이</li>
+          <li><b>허벅지</b>: 가랑이 바로 아래 가로 길이</li>
+          <li><b>밑위</b>: 허리 밴드 위에서 가랑이 봉제선까지</li>
+          <li><b>밑단</b>: 밑단 가로 길이</li>
+          <li><b>총장</b>: 허리 위에서 밑단 끝까지 옆선 길이</li>
+        </ul>
+      </details>
+    </section>
+
+    <!-- 내 정보 -->
+    <section id="tab-body" class="tab">
+      <form id="body-form" class="card">
+        <h2>내 체형</h2>
+        <p class="hint">줄자로 잰 <b>둘레(cm)</b>를 입력하면 옷과 몸 사이 여유분도 같이 보여 줘요. 비워 둬도 돼요.</p>
+        <div class="grid3" id="b-measures"></div>
+        <button type="submit" class="primary block">저장</button>
+        <p class="saved hidden" id="body-saved">저장했어요</p>
+      </form>
+
+      <div class="card">
+        <h2>데이터 백업</h2>
+        <p class="hint">데이터는 이 기기 브라우저에만 저장돼요. 기기를 바꿀 때는 파일로 옮겨 주세요.</p>
+        <div class="btn-row">
+          <button type="button" class="ghost" id="export-btn">내보내기</button>
+          <label class="ghost file-btn">가져오기
+            <input type="file" id="import-file" accept="application/json" hidden>
+          </label>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button type="button" data-tab="compare" class="active">핏 비교</button>
+    <button type="button" data-tab="closet">내 바지</button>
+    <button type="button" data-tab="body">내 체형</button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
