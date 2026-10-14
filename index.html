@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1f2937">
-  <meta name="description" content="내 바지와 새 바지의 실측을 비교해 핏을 미리 예측하는 앱">
+  <meta name="description" content="내 옷과 새 옷의 실측을 비교해 핏을 미리 예측하고, 내 몸 위에 입혀 보는 앱">
   <title>핏체크</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -14,16 +14,20 @@
 <body>
   <header class="topbar">
     <h1>핏체크</h1>
-    <span class="sub">바지 핏 예측</span>
+    <span class="sub">옷 핏 예측</span>
   </header>
 
   <main>
     <!-- 핏 비교 -->
     <section id="tab-compare" class="tab active">
       <div class="card">
-        <h2>새 바지 실측 입력</h2>
-        <p class="hint">쇼핑몰 실측표를 그대로 옮겨 주세요. 모든 둘레는 <b>단면(cm)</b> 기준이에요.</p>
-        <label class="field">비교 기준 (내 바지)
+        <h2>새 옷 실측 입력</h2>
+        <div class="segment" id="new-category" role="tablist" aria-label="옷 종류">
+          <button type="button" data-cat="bottom" class="active">바지</button>
+          <button type="button" data-cat="top">상의</button>
+        </div>
+        <p class="hint">쇼핑몰 실측표를 그대로 옮겨 주세요. 둘레는 <b>단면(cm)</b>, 어깨는 <b>전체 너비</b> 기준이에요.</p>
+        <label class="field">비교 기준 (내 옷)
           <select id="ref-select"></select>
         </label>
         <div class="row2">
@@ -65,20 +69,48 @@
       </div>
 
       <div id="result" class="card hidden"></div>
+
+      <div id="tryon" class="card hidden">
+        <h2>내 몸에 입혀 보기</h2>
+        <p class="hint">실측 그대로 내 몸 위에 옷 모양을 그려요. 사진처럼 합성한 것이 아니라 크기와 위치를 보여 주는 도식이에요.</p>
+        <div class="row2">
+          <label class="field">옷 색
+            <input type="color" id="tryon-color" value="#34507f">
+          </label>
+          <label class="field">사이즈
+            <select id="tryon-size"></select>
+          </label>
+        </div>
+        <div class="btn-row">
+          <label class="ghost file-btn">사진으로 보기
+            <input type="file" id="tryon-photo" accept="image/*" hidden>
+          </label>
+          <button type="button" class="primary" id="open-live">카메라로 보기</button>
+        </div>
+        <p class="hint import-status" id="tryon-status"></p>
+        <div id="tryon-view"></div>
+        <ul id="tryon-notes" class="note-list"></ul>
+      </div>
     </section>
 
-    <!-- 내 바지 -->
+    <!-- 내 옷 -->
     <section id="tab-closet" class="tab">
       <div class="card">
-        <h2>잘 맞는 내 바지</h2>
-        <p class="hint">갖고 있는 바지를 눕혀서 재 주세요. 측정 방법은 맨 아래에 있어요.</p>
+        <h2>잘 맞는 내 옷</h2>
+        <p class="hint">갖고 있는 옷을 바닥에 펼쳐 놓고 재 주세요. 재는 법은 맨 아래에 있어요.</p>
         <ul id="closet-list" class="list"></ul>
-        <button type="button" class="primary block" id="add-pants">+ 내 바지 추가</button>
+        <button type="button" class="primary block" id="add-item">+ 내 옷 추가</button>
       </div>
 
-      <form id="pants-form" class="card hidden">
-        <h2 id="pants-form-title">내 바지 추가</h2>
+      <form id="item-form" class="card hidden">
+        <h2 id="item-form-title">내 옷 추가</h2>
         <input type="hidden" id="p-id">
+        <label class="field">종류
+          <select id="p-category">
+            <option value="bottom">바지</option>
+            <option value="top">상의</option>
+          </select>
+        </label>
         <div class="row2">
           <label class="field">이름
             <input id="p-name" type="text" required placeholder="예: 리바이스 511">
@@ -105,7 +137,7 @@
           </label>
         </div>
         <div class="btn-row">
-          <button type="button" class="ghost" id="cancel-pants">취소</button>
+          <button type="button" class="ghost" id="cancel-item">취소</button>
           <button type="submit" class="primary">저장</button>
         </div>
       </form>
@@ -119,6 +151,16 @@
           <li><b>밑위</b>: 허리 밴드 위에서 가랑이 봉제선까지</li>
           <li><b>밑단</b>: 밑단 가로 길이</li>
           <li><b>총장</b>: 허리 위에서 밑단 끝까지 옆선 길이</li>
+        </ul>
+      </details>
+      <details class="card guide">
+        <summary>상의 재는 법</summary>
+        <ul>
+          <li><b>어깨</b>: 양쪽 어깨 봉제선 끝 사이 직선 길이 (전체 너비)</li>
+          <li><b>가슴</b>: 양쪽 겨드랑이 아래 끝 사이 가로 길이 (단면)</li>
+          <li><b>소매</b>: 어깨 봉제선에서 소매 끝까지</li>
+          <li><b>총장</b>: 옷깃 옆 어깨 가장 높은 곳에서 밑단 끝까지</li>
+          <li><b>밑단</b>: 밑단 가로 길이 (단면, 선택)</li>
         </ul>
       </details>
     </section>
@@ -158,7 +200,7 @@
 
       <form id="body-form" class="card">
         <h2>내 체형</h2>
-        <p class="hint">줄자로 잰 <b>둘레(cm)</b>를 입력하면 옷과 몸 사이 여유분도 같이 보여 줘요. 비워 둬도 돼요.</p>
+        <p class="hint">줄자로 잰 <b>둘레(cm)</b>를 입력하면 옷과 몸 사이 여유분도 같이 보여 줘요. 어깨너비는 양 어깨 끝 사이 직선 길이예요. 비워 둬도 돼요.</p>
         <div class="grid3" id="b-measures"></div>
         <button type="submit" class="primary block">저장</button>
         <p class="saved hidden" id="body-saved">저장했어요</p>
@@ -179,12 +221,27 @@
 
   <nav class="bottom-nav">
     <button type="button" data-tab="compare" class="active">핏 비교</button>
-    <button type="button" data-tab="closet">내 바지</button>
+    <button type="button" data-tab="closet">내 옷</button>
     <button type="button" data-tab="body">내 체형</button>
   </nav>
 
+  <!-- 라이브 카메라 -->
+  <div id="live" class="live hidden" role="dialog" aria-label="카메라로 입혀 보기">
+    <video id="live-video" playsinline muted></video>
+    <canvas id="live-canvas"></canvas>
+    <p id="live-hint" class="live-hint"></p>
+    <div class="live-bar">
+      <button type="button" id="live-close">닫기</button>
+      <button type="button" id="live-flip">카메라 전환</button>
+      <select id="live-size" aria-label="사이즈"></select>
+      <input type="color" id="live-color" aria-label="옷 색">
+    </div>
+  </div>
+
   <script src="parse.js"></script>
   <script src="body.js"></script>
+  <script src="garment.js"></script>
   <script src="app.js"></script>
+  <script src="tryon.js"></script>
 </body>
 </html>

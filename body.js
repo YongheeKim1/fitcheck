@@ -19,7 +19,7 @@
   const FACE_FOREHEAD = 10;
 
   // 둘레 추정: 옆모습 사진이 없을 때 쓰는 "두께 ÷ 폭" 일반 비율
-  const DEFAULT_DEPTH_RATIO = { waist: 0.75, hip: 0.75, thigh: 1.05 };
+  const DEFAULT_DEPTH_RATIO = { chest: 0.7, waist: 0.75, hip: 0.75, thigh: 1.05 };
 
   function makeGrid(mask) {
     const { data, width: w, height: h } = mask;
@@ -166,6 +166,10 @@
     // 어깨: 어깨 높이 겉 실루엣 폭
     const shoulderRun = g.runAt(shoulderY, cx, 5);
 
+    // 가슴: 겨드랑이 높이(어깨~골반의 28% 아래)의 몸통 폭
+    const chestY = shoulderY + (hipY - shoulderY) * 0.28;
+    const chest = bodyRunAt(chestY, cx);
+
     // 허리: 어깨와 골반 사이 아래쪽에서 가장 잘록한 곳
     let waist = null;
     for (let y = shoulderY + (hipY - shoulderY) * 0.45; y <= hipY - (hipY - shoulderY) * 0.05; y++) {
@@ -195,6 +199,11 @@
       headCm: toCm(headLen),
       shoulderCm: toCm(shoulderRun?.w),
       shoulderJointCm: toCm(shoulderJoint),
+      // 옷 어깨너비(봉제선 끝~끝)는 관절 사이와 겉 실루엣의 중간쯤 + 2cm
+      shoulderWidthCm: shoulderRun ? Math.round(((shoulderJoint + shoulderRun.w) / 2) * cm + 2) : null,
+      chestWidthCm: toCm(chest?.w),
+      pxPerCm: 1 / cm, // 마스크 픽셀 기준
+      maskW: g.w,
       waistWidthCm: toCm(waist?.w),
       hipWidthCm: toCm(hip?.w),
       thighWidthCm: toCm(thighW),
@@ -202,12 +211,13 @@
       legRatio: Math.round(((bottomY - hipY) / Hpx) * 1000) / 1000,       // 골반 관절 높이 ÷ 키
       upperLowerRatio: Math.round(((crotchY - headTop) / (bottomY - crotchY)) * 100) / 100,
       crotchEstimated,
-      levels: { waist: waist && frac(waist.y), hip: hip && frac(hip.y), thigh: frac(thighY) },
+      levels: { chest: chest && frac(chestY), waist: waist && frac(waist.y), hip: hip && frac(hip.y), thigh: frac(thighY) },
       // 화면에 그릴 때 쓰는 픽셀 좌표(마스크 기준)
       draw: {
         maskW: g.w, maskH: g.h, headTop, chinY, bottomY, crotchY, crotchX: midHipX, headLen,
         lines: [
           shoulderRun && { key: '어깨', y: shoulderY, l: shoulderRun.l, r: shoulderRun.r },
+          chest && { key: '가슴', y: chestY, l: chest.l, r: chest.r },
           waist && { key: '허리', y: waist.y, l: waist.l, r: waist.r },
           hip && { key: '엉덩이', y: hip.y, l: hip.l, r: hip.r },
           ...legRuns.map((r) => ({ key: '허벅지', y: thighY, l: r.l, r: r.r })),
@@ -251,7 +261,7 @@
   }
 
   function estimateGirths(front, sideDepth) {
-    const widths = { waist: front.waistWidthCm, hip: front.hipWidthCm, thigh: front.thighWidthCm };
+    const widths = { chest: front.chestWidthCm, waist: front.waistWidthCm, hip: front.hipWidthCm, thigh: front.thighWidthCm };
     const out = {};
     for (const [key, w] of Object.entries(widths)) {
       if (w == null) continue;
@@ -270,18 +280,18 @@
     if (!S || !W || !H) return null;
     const sh = S / H, wh = W / H;
     if (wh <= 0.78 && sh >= 0.95 && sh <= 1.2) {
-      return { name: '모래시계형', desc: '어깨와 엉덩이 폭이 비슷하고 허리가 잘록해요.', tip: '허리에 맞추면 엉덩이·허벅지가 낄 수 있어요. 엉덩이 실측부터 확인하세요.' };
+      return { name: '모래시계형', desc: '어깨와 엉덩이 폭이 비슷하고 허리가 잘록해요.', tip: '상의는 허리선이 들어간 핏이 잘 어울려요. 바지는 허리에 맞추면 엉덩이·허벅지가 낄 수 있으니 엉덩이 실측부터 확인하세요.' };
     }
     if (sh >= 1.2) {
-      return { name: '역삼각형', desc: '엉덩이보다 어깨가 넓은 상체 중심 체형이에요.', tip: '바지는 허리 기준으로 고르고, 하체에 볼륨이 있는 와이드·스트레이트 핏이 균형을 잡아 줘요.' };
+      return { name: '역삼각형', desc: '엉덩이보다 어깨가 넓은 상체 중심 체형이에요.', tip: '상의는 어깨너비를 먼저 맞추고 가슴 여유를 확인하세요. 바지는 허리 기준으로, 와이드·스트레이트 핏이 균형을 잡아 줘요.' };
     }
     if (sh <= 0.95) {
-      return { name: '삼각형(하체형)', desc: '어깨보다 엉덩이·허벅지 쪽이 넓은 체형이에요.', tip: '허리가 맞아도 엉덩이·허벅지가 낄 수 있어요. 엉덩이·허벅지 실측을 먼저 보세요.' };
+      return { name: '삼각형(하체형)', desc: '어깨보다 엉덩이·허벅지 쪽이 넓은 체형이에요.', tip: '상의는 어깨가 살짝 넓거나 밑단이 골반을 덮는 기장이 균형을 잡아 줘요. 바지는 엉덩이·허벅지 실측을 먼저 보세요.' };
     }
     if (wh >= 0.88) {
-      return { name: '일자형', desc: '어깨·허리·엉덩이 폭 차이가 크지 않은 체형이에요.', tip: '허리 실측이 가장 중요해요. 대부분의 핏이 무난하게 맞아요.' };
+      return { name: '일자형', desc: '어깨·허리·엉덩이 폭 차이가 크지 않은 체형이에요.', tip: '상의는 가슴, 바지는 허리 실측이 가장 중요해요. 대부분의 핏이 무난하게 맞아요.' };
     }
-    return { name: '균형형', desc: '어깨와 엉덩이 비율이 고른 체형이에요.', tip: '허리 기준으로 고르고 허벅지 여유만 확인하면 돼요.' };
+    return { name: '균형형', desc: '어깨와 엉덩이 비율이 고른 체형이에요.', tip: '상의는 어깨, 바지는 허리 기준으로 고르고 가슴·허벅지 여유만 확인하면 돼요.' };
   }
 
   const api = { analyzeFront, analyzeSide, estimateGirths, bodyShape, ellipse };

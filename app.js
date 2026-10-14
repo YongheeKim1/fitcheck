@@ -1,20 +1,34 @@
 'use strict';
 
 // ---------- 측정 항목 정의 ----------
-// 옷 실측: 모두 단면(cm). ok/warn: 이 차이(cm) 이내면 "비슷함"/"조금" 판정
+// 옷 실측: 둘레는 단면(cm), 어깨는 전체 너비(cm). ok/warn: 이 차이(cm) 이내면 "비슷함"/"조금" 판정
 // weight: 사이즈 추천 점수 가중치. 밑위·밑단은 사이즈보다 디자인이 좌우하므로 0
-const PARTS = [
-  { key: 'waist', label: '허리', kind: 'girth', ok: 1, warn: 2, weight: 3, body: 'waist' },
-  { key: 'hip', label: '엉덩이', kind: 'girth', ok: 1.5, warn: 3, weight: 2, body: 'hip' },
-  { key: 'thigh', label: '허벅지', kind: 'girth', ok: 1, warn: 2.5, weight: 2, body: 'thigh' },
-  { key: 'rise', label: '밑위', kind: 'rise', ok: 1, warn: 2.5, weight: 0 },
-  { key: 'hem', label: '밑단', kind: 'hem', ok: 1, warn: 2.5, weight: 0 },
-  { key: 'length', label: '총장', kind: 'length', ok: 2, warn: 4, weight: 1 },
-];
+// body: 몸 치수 항목. bodyMul: 옷 값을 몸 치수와 비교할 때 곱하는 수(단면 → 둘레는 2, 어깨는 1)
+const CATEGORY_PARTS = {
+  bottom: [
+    { key: 'waist', label: '허리', kind: 'girth', ok: 1, warn: 2, weight: 3, body: 'waist' },
+    { key: 'hip', label: '엉덩이', kind: 'girth', ok: 1.5, warn: 3, weight: 2, body: 'hip' },
+    { key: 'thigh', label: '허벅지', kind: 'girth', ok: 1, warn: 2.5, weight: 2, body: 'thigh' },
+    { key: 'rise', label: '밑위', kind: 'rise', ok: 1, warn: 2.5, weight: 0 },
+    { key: 'hem', label: '밑단', kind: 'hem', ok: 1, warn: 2.5, weight: 0 },
+    { key: 'length', label: '총장', kind: 'length', ok: 2, warn: 4, weight: 1 },
+  ],
+  top: [
+    { key: 'shoulder', label: '어깨', kind: 'shoulder', ok: 1, warn: 2.5, weight: 2, body: 'shoulder', bodyMul: 1 },
+    { key: 'chest', label: '가슴', kind: 'girth', ok: 1.5, warn: 3, weight: 3, body: 'chest' },
+    { key: 'sleeve', label: '소매', kind: 'length', ok: 1.5, warn: 3, weight: 0.5 },
+    { key: 'length', label: '총장', kind: 'length', ok: 2, warn: 4, weight: 1 },
+    { key: 'hem', label: '밑단', kind: 'hem', ok: 2, warn: 4, weight: 0 },
+  ],
+};
+const CATEGORY_LABEL = { bottom: '바지', top: '상의' };
+const partsOf = (cat) => CATEGORY_PARTS[cat] || CATEGORY_PARTS.bottom;
 
-// 몸 치수: 둘레(cm)
+// 몸 치수: 둘레(cm), 어깨너비는 양 어깨 끝 사이 직선(cm)
 const BODY_FIELDS = [
   { key: 'height', label: '키' },
+  { key: 'shoulder', label: '어깨너비' },
+  { key: 'chest', label: '가슴둘레' },
   { key: 'waist', label: '허리둘레' },
   { key: 'hip', label: '엉덩이둘레' },
   { key: 'thigh', label: '허벅지둘레' },
@@ -22,7 +36,7 @@ const BODY_FIELDS = [
 ];
 
 const STRETCH_BONUS = { none: 0, some: 0.5, high: 1 };   // 신축성이 주는 여유(cm, 단면)
-const FEEL_OFFSET = { good: 0, tight: 1.5, loose: -1.5 };     // 기준 바지 착용감 보정(cm, 단면)
+const FEEL_OFFSET = { good: 0, tight: 1.5, loose: -1.5 };     // 기준 옷 착용감 보정(cm, 단면)
 const STRETCH_LABEL = { none: '신축성 없음', some: '신축성 약간', high: '신축성 많음' };
 const FEEL_LABEL = { good: '딱 좋음', tight: '조금 낌', loose: '조금 큼' };
 
@@ -35,7 +49,11 @@ function loadState() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return empty;
-    return { ...empty, ...JSON.parse(raw) };
+    const st = { ...empty, ...JSON.parse(raw) };
+    // 상의 지원 이전에 저장한 데이터는 모두 바지
+    st.closet.forEach((p) => { p.category = p.category || 'bottom'; });
+    if (st.draft) st.draft.category = st.draft.category || 'bottom';
+    return st;
   } catch {
     return empty;
   }
@@ -69,6 +87,13 @@ function signed(n) {
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// 받침에 따라 조사 고르기: josa('가슴', '이', '가') → '가슴이'
+function josa(word, withBatchim, without) {
+  const code = word.charCodeAt(word.length - 1) - 0xac00;
+  const has = code >= 0 && code <= 11171 && code % 28 !== 0;
+  return word + (has ? withBatchim : without);
 }
 
 function uid() {
@@ -110,19 +135,19 @@ $('#body-form').addEventListener('submit', (e) => {
   setTimeout(() => msg.classList.add('hidden'), 1500);
 });
 
-// ---------- 내 바지 ----------
+// ---------- 내 옷 ----------
 function renderCloset() {
   const list = $('#closet-list');
   if (!state.closet.length) {
-    list.innerHTML = '<li class="empty">아직 등록한 바지가 없어요. 제일 잘 맞는 바지부터 넣어 보세요.</li>';
+    list.innerHTML = '<li class="empty">아직 등록한 옷이 없어요. 제일 잘 맞는 바지나 상의부터 넣어 보세요.</li>';
     return;
   }
   list.innerHTML = state.closet.map((p) => {
-    const m = PARTS.filter((pt) => p[pt.key] != null).map((pt) => `${pt.label} ${fmt(p[pt.key])}`).join(' · ');
+    const m = partsOf(p.category).filter((pt) => p[pt.key] != null).map((pt) => `${pt.label} ${fmt(p[pt.key])}`).join(' · ');
     return `
       <li>
         <div>
-          <div><b>${esc(p.name)}</b> ${p.size ? `<span class="meta">(${esc(p.size)})</span>` : ''}</div>
+          <div><span class="tag">${CATEGORY_LABEL[p.category]}</span> <b>${esc(p.name)}</b> ${p.size ? `<span class="meta">(${esc(p.size)})</span>` : ''}</div>
           <div class="meta">${FEEL_LABEL[p.feel]} · ${STRETCH_LABEL[p.stretch]}</div>
           <div class="meta">${m || '실측 없음'}</div>
         </div>
@@ -137,7 +162,7 @@ function renderCloset() {
 $('#closet-list').addEventListener('click', (e) => {
   const editId = e.target.dataset.edit;
   const delId = e.target.dataset.del;
-  if (editId) openPantsForm(state.closet.find((p) => p.id === editId));
+  if (editId) openItemForm(state.closet.find((p) => p.id === editId));
   if (delId) {
     const p = state.closet.find((x) => x.id === delId);
     if (p && confirm(`'${p.name}'을(를) 삭제할까요?`)) {
@@ -148,68 +173,112 @@ $('#closet-list').addEventListener('click', (e) => {
   }
 });
 
-$('#p-measures').innerHTML = PARTS.map((pt) => `
-  <label class="field">${pt.label}
-    <input type="number" inputmode="decimal" step="0.1" name="${pt.key}">
-  </label>`).join('');
+// 종류를 바꾸면 입력 칸도 바뀐다(같은 이름의 칸 값은 유지)
+function renderItemMeasures(cat, values = {}) {
+  $('#p-measures').innerHTML = partsOf(cat).map((pt) => `
+    <label class="field">${pt.label}
+      <input type="number" inputmode="decimal" step="0.1" name="${pt.key}" value="${values[pt.key] ?? ''}">
+    </label>`).join('');
+}
 
-function openPantsForm(p) {
-  const form = $('#pants-form');
+function currentMeasureValues() {
+  const values = {};
+  $('#p-measures').querySelectorAll('input').forEach((i) => { values[i.name] = num(i.value); });
+  return values;
+}
+
+$('#p-category').addEventListener('change', (e) => renderItemMeasures(e.target.value, currentMeasureValues()));
+
+function openItemForm(p) {
+  const form = $('#item-form');
   form.reset();
-  $('#pants-form-title').textContent = p ? '내 바지 수정' : '내 바지 추가';
+  $('#item-form-title').textContent = p ? '내 옷 수정' : '내 옷 추가';
   $('#p-id').value = p?.id ?? '';
+  const cat = p?.category ?? state.draft.category;
+  $('#p-category').value = cat;
+  renderItemMeasures(cat, p || {});
   if (p) {
     $('#p-name').value = p.name;
     $('#p-size').value = p.size ?? '';
     $('#p-stretch').value = p.stretch;
     $('#p-feel').value = p.feel;
-    for (const pt of PARTS) form.elements[pt.key].value = p[pt.key] ?? '';
   }
   form.classList.remove('hidden');
   form.scrollIntoView({ behavior: 'smooth' });
 }
 
-$('#add-pants').addEventListener('click', () => openPantsForm(null));
-$('#cancel-pants').addEventListener('click', () => $('#pants-form').classList.add('hidden'));
+$('#add-item').addEventListener('click', () => openItemForm(null));
+$('#cancel-item').addEventListener('click', () => $('#item-form').classList.add('hidden'));
 
-$('#pants-form').addEventListener('submit', (e) => {
+$('#item-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const form = e.target;
   const id = $('#p-id').value || uid();
-  const pants = {
+  const category = $('#p-category').value;
+  const item = {
     id,
-    name: $('#p-name').value.trim() || '이름 없는 바지',
+    category,
+    name: $('#p-name').value.trim() || `이름 없는 ${CATEGORY_LABEL[category]}`,
     size: $('#p-size').value.trim(),
     stretch: $('#p-stretch').value,
     feel: $('#p-feel').value,
   };
-  for (const pt of PARTS) pants[pt.key] = num(form.elements[pt.key].value);
+  // form.elements['length']는 칸 개수(숫자)를 돌려주므로 이름으로 직접 찾는다
+  for (const pt of partsOf(category)) item[pt.key] = num(form.querySelector(`[name="${pt.key}"]`).value);
 
   const idx = state.closet.findIndex((p) => p.id === id);
-  if (idx >= 0) state.closet[idx] = pants;
-  else state.closet.push(pants);
+  if (idx >= 0) state.closet[idx] = item;
+  else state.closet.push(item);
   saveState();
   form.classList.add('hidden');
   renderCloset();
 });
 
-// ---------- 새 바지 사이즈표 ----------
+// ---------- 새 옷 사이즈표 ----------
 function defaultDraft() {
-  return { name: '', stretch: 'none', refId: null, rows: [{ size: 'S' }, { size: 'M' }, { size: 'L' }] };
+  return { category: 'bottom', name: '', stretch: 'none', refId: null, rows: [{ size: 'S' }, { size: 'M' }, { size: 'L' }] };
 }
 if (!state.draft) state.draft = defaultDraft();
 
 function renderSizeTable() {
-  $('#size-head').innerHTML = '<th>사이즈</th>' + PARTS.map((pt) => `<th>${pt.label}</th>`).join('') + '<th></th>';
+  const parts = partsOf(state.draft.category);
+  $('#size-head').innerHTML = '<th>사이즈</th>' + parts.map((pt) => `<th>${pt.label}</th>`).join('') + '<th></th>';
   $('#size-body').innerHTML = state.draft.rows.map((r, i) => `
     <tr>
       <td><input type="text" data-row="${i}" data-key="size" value="${esc(r.size ?? '')}"></td>
-      ${PARTS.map((pt) => `<td><input type="number" inputmode="decimal" step="0.1" data-row="${i}" data-key="${pt.key}" value="${r[pt.key] ?? ''}"></td>`).join('')}
+      ${parts.map((pt) => `<td><input type="number" inputmode="decimal" step="0.1" data-row="${i}" data-key="${pt.key}" value="${r[pt.key] ?? ''}"></td>`).join('')}
       <td><button type="button" class="del" data-delrow="${i}" aria-label="행 삭제">삭제</button></td>
     </tr>`).join('');
   $('#new-name').value = state.draft.name;
+  $('#new-name').placeholder = state.draft.category === 'top' ? '예: 오버핏 셔츠' : '예: 와이드 데님';
   $('#new-stretch').value = state.draft.stretch;
+  document.querySelectorAll('#new-category button').forEach((b) => b.classList.toggle('active', b.dataset.cat === state.draft.category));
 }
+
+// 바지/상의 전환: 다른 종류 결과는 숨기고 기준 옷 목록을 다시 고른다
+function setCategory(cat) {
+  const d = state.draft;
+  if (d.category === cat) return;
+  // 사이즈표·상품명은 종류별로 따로 보관한다(바지 숫자가 상의 표에 섞이지 않게)
+  d.stash = d.stash || {};
+  d.stash[d.category] = { rows: d.rows, name: d.name };
+  const next = d.stash[cat];
+  d.rows = next?.rows || defaultDraft().rows;
+  d.name = next?.name ?? '';
+  d.category = cat;
+  d.refId = null;
+  saveState();
+  renderSizeTable();
+  renderRefSelect();
+  lastResults = null;
+  $('#result').classList.add('hidden');
+  $('#tryon').classList.add('hidden');
+}
+
+$('#new-category').addEventListener('click', (e) => {
+  const cat = e.target.dataset.cat;
+  if (cat) setCategory(cat);
+});
 
 $('#size-body').addEventListener('input', (e) => {
   const { row, key } = e.target.dataset;
@@ -239,18 +308,19 @@ $('#ref-select').addEventListener('change', (e) => { state.draft.refId = e.targe
 
 function renderRefSelect() {
   const sel = $('#ref-select');
-  if (!state.closet.length) {
-    sel.innerHTML = '<option value="">먼저 \'내 바지\' 탭에서 바지를 추가해 주세요</option>';
+  const items = state.closet.filter((p) => p.category === state.draft.category);
+  if (!items.length) {
+    sel.innerHTML = `<option value="">먼저 '내 옷' 탭에서 ${CATEGORY_LABEL[state.draft.category]}를 추가해 주세요</option>`;
     sel.disabled = true;
     return;
   }
   sel.disabled = false;
-  // 기준 기본값: 저장된 선택 → "딱 좋음" 바지 → 첫 번째
-  const ref = state.closet.find((p) => p.id === state.draft.refId)
-    || state.closet.find((p) => p.feel === 'good')
-    || state.closet[0];
+  // 기준 기본값: 저장된 선택 → "딱 좋음" 옷 → 첫 번째
+  const ref = items.find((p) => p.id === state.draft.refId)
+    || items.find((p) => p.feel === 'good')
+    || items[0];
   state.draft.refId = ref.id;
-  sel.innerHTML = state.closet.map((p) =>
+  sel.innerHTML = items.map((p) =>
     `<option value="${p.id}" ${p.id === ref.id ? 'selected' : ''}>${esc(p.name)}${p.size ? ` (${esc(p.size)})` : ''} · ${FEEL_LABEL[p.feel]}</option>`).join('');
 }
 
@@ -277,16 +347,19 @@ $('#toggle-paste').addEventListener('click', () => {
 });
 
 function applyChartText(text) {
-  const { rows, parts, warnings } = parseSizeChart(text);
+  const { rows, parts, warnings, category } = parseSizeChart(text);
   if (!rows.length) {
     setImportStatus(esc(warnings.join('\n')), 'err');
     return false;
   }
+  const switched = category !== state.draft.category;
+  setCategory(category);
   state.draft.rows = rows;
   saveState();
   renderSizeTable();
   const sizes = rows.map((r) => r.size || '?').join('·');
-  const msg = [`${rows.length}개 사이즈(${sizes}) · ${parts.join(', ')} 인식했어요. 아래 표에서 숫자를 확인해 주세요.`, ...warnings];
+  const msg = [`${CATEGORY_LABEL[category]} 사이즈표 · ${rows.length}개 사이즈(${sizes}) · ${parts.join(', ')} 인식했어요. 아래 표에서 숫자를 확인해 주세요.`, ...warnings];
+  if (switched) msg.push(`${CATEGORY_LABEL[category]} 표로 보여서 종류를 ${CATEGORY_LABEL[category]}로 바꿨어요.`);
   setImportStatus(esc(msg.join('\n')), warnings.length ? '' : 'ok');
   return true;
 }
@@ -396,13 +469,13 @@ async function importImage(file) {
 }
 
 // ---------- 핏 계산 ----------
-// 한 사이즈 행을 기준 바지와 비교해 부위별 판정을 만든다
+// 한 사이즈 행을 기준 옷과 비교해 부위별 판정을 만든다
 function compareRow(row, ref, newStretch, body) {
   const parts = [];
   let score = 0;
   let used = 0;
 
-  for (const pt of PARTS) {
+  for (const pt of partsOf(ref.category)) {
     const nv = row[pt.key];
     const rv = ref[pt.key];
     if (nv == null || rv == null) continue;
@@ -410,18 +483,18 @@ function compareRow(row, ref, newStretch, body) {
     const raw = nv - rv;
     let eff = raw;
     if (pt.kind === 'girth') {
-      // 새 바지가 더 잘 늘어나면 체감상 여유가 생기고, 기준 바지가 꼈다면 더 커야 "딱 좋음"
+      // 새 옷이 더 잘 늘어나면 체감상 여유가 생기고, 기준 옷이 꼈다면 더 커야 "딱 좋음"
       eff += STRETCH_BONUS[newStretch] - STRETCH_BONUS[ref.stretch];
       eff -= FEEL_OFFSET[ref.feel];
     }
 
     const verdict = judge(pt, eff);
 
-    // 몸 둘레 대비 여유분(옷 둘레 = 단면 × 2)
+    // 몸 치수 대비 여유분(둘레 = 단면 × 2, 어깨는 그대로)
     let ease = null;
     if (pt.body && body[pt.body] != null) {
-      ease = nv * 2 - body[pt.body];
-      if (ease < 0 && newStretch === 'none') {
+      ease = nv * (pt.bodyMul ?? 2) - body[pt.body];
+      if (pt.kind === 'girth' && ease < 0 && newStretch === 'none') {
         verdict.level = 'bad';
         verdict.text = '몸보다 작음';
       }
@@ -431,7 +504,7 @@ function compareRow(row, ref, newStretch, body) {
     if (pt.weight) {
       const tightPenalty = pt.kind === 'girth' && eff < 0 ? 2 : 1; // 큰 건 줄여 입어도 작은 건 못 입는다
       score += pt.weight * tightPenalty * (eff / pt.ok) ** 2;
-      if (ease !== null && ease < 0 && newStretch === 'none') score += 1000;
+      if (pt.kind === 'girth' && ease !== null && ease < 0 && newStretch === 'none') score += 1000;
       used += pt.weight;
     }
   }
@@ -448,6 +521,7 @@ function judge(pt, d) {
     girth: d < 0 ? '낌' : '여유',
     rise: d < 0 ? '짧음' : '김',
     hem: d < 0 ? '좁음' : '넓음',
+    shoulder: d < 0 ? '좁음' : '넓음',
     length: d < 0 ? '짧음' : '김',
   }[pt.kind];
   return { level, text: little + words };
@@ -455,10 +529,10 @@ function judge(pt, d) {
 
 function summarize(result, ref) {
   const off = result.parts.filter((p) => p.verdict.level !== 'ok');
-  if (!result.parts.length) return '비교할 수 있는 실측이 없어요. 기준 바지와 같은 항목을 입력해 주세요.';
+  if (!result.parts.length) return '비교할 수 있는 실측이 없어요. 기준 옷과 같은 항목을 입력해 주세요.';
   if (!off.length) return `'${ref.name}'과(와) 거의 같은 핏이에요.`;
   const bits = off.map((p) => {
-    if (p.verdict.text === '몸보다 작음') return `${p.label}가 몸 둘레보다 ${fmt(Math.abs(p.ease))}cm 작음`;
+    if (p.verdict.text === '몸보다 작음') return `${josa(p.label, '이', '가')} 몸 둘레보다 ${fmt(Math.abs(p.ease))}cm 작음`;
     return `${p.label} ${p.verdict.text}(${fmt(Math.abs(p.raw))}cm)`;
   });
   return `'${ref.name}' 대비 ${bits.join(', ')}.`;
@@ -468,13 +542,14 @@ function summarize(result, ref) {
 let lastResults = null;
 
 $('#run-compare').addEventListener('click', () => {
-  const ref = state.closet.find((p) => p.id === state.draft.refId);
+  const cat = state.draft.category;
+  const ref = state.closet.find((p) => p.id === state.draft.refId && p.category === cat);
   if (!ref) {
-    alert('먼저 \'내 바지\' 탭에서 기준이 될 바지를 추가해 주세요.');
+    alert(`먼저 '내 옷' 탭에서 기준이 될 ${CATEGORY_LABEL[cat]}를 추가해 주세요.`);
     showTab('closet');
     return;
   }
-  const rows = state.draft.rows.filter((r) => PARTS.some((pt) => r[pt.key] != null));
+  const rows = state.draft.rows.filter((r) => partsOf(cat).some((pt) => r[pt.key] != null));
   if (!rows.length) {
     alert('사이즈표에 실측을 한 줄 이상 입력해 주세요.');
     return;
@@ -482,13 +557,13 @@ $('#run-compare').addEventListener('click', () => {
 
   const results = rows.map((row) => ({ row, ...compareRow(row, ref, state.draft.stretch, state.body) }));
   const best = results.reduce((a, b) => (b.score < a.score ? b : a));
-  lastResults = { ref, results, best, selected: best };
+  lastResults = { category: cat, ref, results, best, selected: best };
   renderResult();
   $('#result').scrollIntoView({ behavior: 'smooth' });
 });
 
 function renderResult() {
-  const { ref, results, best, selected } = lastResults;
+  const { category, ref, results, best, selected } = lastResults;
   const box = $('#result');
   box.classList.remove('hidden');
 
@@ -499,7 +574,7 @@ function renderResult() {
     </div>` : '';
 
   const rec = results.length > 1
-    ? `<p class="hint">추천 사이즈: <b>${esc(best.row.size || '')}</b> — 기준 바지와 가장 비슷한 사이즈예요.</p>` : '';
+    ? `<p class="hint">추천 사이즈: <b>${esc(best.row.size || '')}</b> — 기준 옷과 가장 비슷한 사이즈예요.</p>` : '';
 
   const rowsHtml = selected.parts.map((p) => `
     <tr>
@@ -515,21 +590,23 @@ function renderResult() {
 
   const notes = [];
   if (state.draft.stretch !== ref.stretch) notes.push(`신축성 차이(${STRETCH_LABEL[state.draft.stretch]} vs ${STRETCH_LABEL[ref.stretch]})를 판정에 반영했어요.`);
-  if (ref.feel !== 'good') notes.push(`기준 바지가 '${FEEL_LABEL[ref.feel]}'이라서 그만큼 보정했어요.`);
+  if (ref.feel !== 'good') notes.push(`기준 옷이 '${FEEL_LABEL[ref.feel]}'이라서 그만큼 보정했어요.`);
 
   box.innerHTML = `
-    <h2>${esc(state.draft.name || '새 바지')} 핏 예측</h2>
+    <h2>${esc(state.draft.name || `새 ${CATEGORY_LABEL[category]}`)} 핏 예측</h2>
     ${tabs}
     ${rec}
     <p class="summary">${esc(summarize(selected, ref))}</p>
     <table class="diff-table">
-      <thead><tr><th>부위</th><th>새 바지</th><th>내 바지</th><th>차이</th><th>판정</th></tr></thead>
+      <thead><tr><th>부위</th><th>새 옷</th><th>내 옷</th><th>차이</th><th>판정</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
     ${notes.length ? `<p class="hint" style="margin-top:10px">${notes.map(esc).join('<br>')}</p>` : ''}
     <h3>실루엣 비교</h3>
-    ${renderSilhouette(selected.row, ref, state.body)}
+    ${renderSilhouette(selected.row, ref, state.body, category)}
   `;
+  // 입혀 보기 카드(tryon.js)에 결과가 바뀐 것을 알린다
+  if (typeof onCompareResult === 'function') onCompareResult();
 }
 
 $('#result').addEventListener('click', (e) => {
@@ -557,20 +634,54 @@ function pantsShape(p) {
     [0, 0],
     [-(c - h), bottom], [-(c + h), bottom], [-t, 0], [-hip, hipY],
   ];
-  return { pts, minY: top, maxY: bottom, maxX: Math.max(w, hip, t, c + h) };
+  return { paths: [pts], minY: top, maxY: bottom, maxX: Math.max(w, hip, t, c + h) };
 }
 
-function renderSilhouette(row, ref, body) {
-  const a = pantsShape(ref);
-  const b = pantsShape(row);
-  if (!a || !b) return '<p class="hint">실루엣을 그리려면 허리·허벅지·밑위·밑단·총장이 두 바지 모두 필요해요.</p>';
+// 상의를 펼쳐 놓은 앞모습. 어깨 가장 높은 곳(옷깃 옆) = y 0. 두 옷은 이 높이를 맞춰 겹친다
+function topShape(p) {
+  if (['shoulder', 'chest', 'length'].some((k) => p[k] == null)) return null;
+  const s = p.shoulder / 2;
+  const c = p.chest / 2;
+  const h = (p.hem ?? p.chest) / 2;
+  const armpitY = Math.min(28, Math.max(18, p.length * 0.33));
+  const neck = 9;
+  const paths = [[[-s, 3], [-neck, 0], [0, 6], [neck, 0], [s, 3], [c, armpitY], [h, p.length], [-h, p.length], [-c, armpitY]]];
+  let maxX = Math.max(s, c, h);
+  let maxY = p.length;
+  if (p.sleeve != null) {
+    // 소매: 어깨 끝에서 바깥 아래(55도)로 펼친 모양. 소매 입구 폭 = 진동(어깨 끝~겨드랑이) 길이
+    const ang = (55 * Math.PI) / 180;
+    for (const side of [-1, 1]) {
+      const sp = [side * s, 3];
+      const ap = [side * c, armpitY];
+      const end = [sp[0] + side * Math.cos(ang) * p.sleeve, sp[1] + Math.sin(ang) * p.sleeve];
+      const holeW = Math.hypot(ap[0] - sp[0], ap[1] - sp[1]);
+      const cuffW = holeW * (p.sleeve > 40 ? 0.55 : 0.85);
+      const cuff = [end[0] + ((ap[0] - sp[0]) / holeW) * cuffW, end[1] + ((ap[1] - sp[1]) / holeW) * cuffW];
+      paths.push([sp, end, cuff, ap]);
+      maxX = Math.max(maxX, Math.abs(end[0]), Math.abs(cuff[0]));
+      maxY = Math.max(maxY, end[1], cuff[1]);
+    }
+  }
+  return { paths, minY: 0, maxY, maxX };
+}
 
-  const ankle = body.inseam ?? null;
+function renderSilhouette(row, ref, body, category) {
+  const shape = category === 'top' ? topShape : pantsShape;
+  const a = shape(ref);
+  const b = shape(row);
+  if (!a || !b) {
+    return category === 'top'
+      ? '<p class="hint">실루엣을 그리려면 어깨·가슴·총장이 두 옷 모두 필요해요.</p>'
+      : '<p class="hint">실루엣을 그리려면 허리·허벅지·밑위·밑단·총장이 두 바지 모두 필요해요.</p>';
+  }
+
+  const ankle = category === 'bottom' ? body.inseam ?? null : null;
   const pad = 6;
   const maxX = Math.max(a.maxX, b.maxX) + pad;
   const minY = Math.min(a.minY, b.minY) - pad;
   const maxY = Math.max(a.maxY, b.maxY, ankle ?? 0) + pad;
-  const toPath = (s) => 'M' + s.pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' L') + ' Z';
+  const toPath = (s) => s.paths.map((pts) => 'M' + pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' L') + ' Z').join(' ');
 
   const ankleLine = ankle != null ? `
     <line x1="${-maxX}" x2="${maxX}" y1="${ankle}" y2="${ankle}" stroke="var(--muted)" stroke-width="0.4" stroke-dasharray="1.5 1.5"/>
@@ -578,14 +689,14 @@ function renderSilhouette(row, ref, body) {
 
   return `
     <div class="silhouette">
-      <svg viewBox="${-maxX} ${minY} ${maxX * 2} ${maxY - minY}" role="img" aria-label="두 바지 실루엣 비교">
+      <svg viewBox="${-maxX} ${minY} ${maxX * 2} ${maxY - minY}" role="img" aria-label="두 옷 실루엣 비교">
         ${ankleLine}
         <path d="${toPath(a)}" fill="none" stroke="var(--ref)" stroke-width="0.8" stroke-dasharray="2 1.2" stroke-linejoin="round"/>
         <path d="${toPath(b)}" fill="var(--new)" fill-opacity="0.18" stroke="var(--new)" stroke-width="0.8" stroke-linejoin="round"/>
       </svg>
       <div class="legend">
-        <span><i style="background:var(--ref)"></i>내 바지</span>
-        <span><i style="background:var(--new)"></i>새 바지</span>
+        <span><i style="background:var(--ref)"></i>내 옷</span>
+        <span><i style="background:var(--new)"></i>새 옷</span>
       </div>
     </div>`;
 }
@@ -597,6 +708,8 @@ const POSE_MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmar
 const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 let mp = null; // { pose, face }
 const photos = { front: null, side: null };
+// 마지막으로 분석한 정면 사진(입혀 보기에 다시 쓴다). 메모리에만 두고 저장하지 않는다
+let lastPhoto = null; // { canvas, pose, pxPerCm }
 
 function setAnalysisStatus(text, kind = '') {
   const el = $('#analysis-status');
@@ -714,7 +827,8 @@ $('#run-analysis').addEventListener('click', async () => {
 
     const girths = BodyAnalysis.estimateGirths(front, sideDepth);
     const shape = BodyAnalysis.bodyShape(front);
-    const { draw, levels, ...numbers } = front;
+    lastPhoto = { canvas: frontCanvas, pose: det.pose, pxPerCm: front.pxPerCm * (frontCanvas.width / front.maskW) };
+    const { draw, levels, pxPerCm, maskW, ...numbers } = front;
     state.bodyAnalysis = { date: new Date().toISOString().slice(0, 10), ...numbers, girths, shape };
     saveState();
 
@@ -777,7 +891,7 @@ function drawOverlay(src, d) {
   g.setLineDash([]);
 
   // 측정선
-  const colors = { 어깨: '#f59e0b', 허리: '#ef4444', 엉덩이: '#8b5cf6', 허벅지: '#10b981' };
+  const colors = { 어깨: '#f59e0b', 가슴: '#0ea5e9', 허리: '#ef4444', 엉덩이: '#8b5cf6', 허벅지: '#10b981' };
   for (const line of d.lines) {
     g.strokeStyle = colors[line.key];
     g.lineWidth = lw * 1.5;
@@ -809,7 +923,8 @@ function renderAnalysis(a, canvas, draw) {
     <table class="diff-table">
       <thead><tr><th>항목</th><th>값</th><th></th></tr></thead>
       <tbody>
-        ${row('어깨 폭', a.shoulderCm != null ? `${fmt(a.shoulderCm)}cm` : null, '정면 겉 실루엣')}
+        ${row('어깨너비', a.shoulderWidthCm != null ? `약 ${fmt(a.shoulderWidthCm)}cm` : null, `옷 어깨 기준 · 겉 실루엣 ${fmt(a.shoulderCm)}cm`)}
+        ${row('가슴 둘레', g.chest != null ? `약 ${g.chest}cm` : null, a.chestWidthCm != null ? `정면 폭 ${fmt(a.chestWidthCm)}cm` : '')}
         ${row('허리 둘레', g.waist != null ? `약 ${g.waist}cm` : null, `정면 폭 ${fmt(a.waistWidthCm)}cm`)}
         ${row('엉덩이 둘레', g.hip != null ? `약 ${g.hip}cm` : null, `정면 폭 ${fmt(a.hipWidthCm)}cm`)}
         ${row('허벅지 둘레', g.thigh != null ? `약 ${g.thigh}cm` : null, a.thighWidthCm != null ? `정면 폭 ${fmt(a.thighWidthCm)}cm` : '')}
@@ -818,7 +933,7 @@ function renderAnalysis(a, canvas, draw) {
       </tbody>
     </table>
     <p class="hint" style="margin-top:8px">둘레는 ${g.fromSide ? '정면 폭과 옆모습 두께로' : '정면 폭과 일반적인 몸 두께 비율로'} 계산한 추정치예요(±5cm 정도 오차). 줄자로 잰 값이 더 정확해요.</p>
-    ${a.shape ? `<div class="shape-box"><b>${esc(a.shape.name)}</b><p>${esc(a.shape.desc)}</p><p class="tip">바지 고를 때: ${esc(a.shape.tip)}</p></div>` : ''}
+    ${a.shape ? `<div class="shape-box"><b>${esc(a.shape.name)}</b><p>${esc(a.shape.desc)}</p><p class="tip">옷 고를 때: ${esc(a.shape.tip)}</p></div>` : ''}
     ${a.warnings?.length ? `<ul class="warn-list">${a.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
     <button type="button" class="primary block" id="apply-analysis" style="margin-top:12px">추정치를 내 체형에 채우기</button>
   `;
@@ -828,7 +943,8 @@ function renderAnalysis(a, canvas, draw) {
 $('#analysis-result').addEventListener('click', (e) => {
   if (e.target.id !== 'apply-analysis') return;
   const a = state.bodyAnalysis;
-  const est = { waist: a.girths?.waist, hip: a.girths?.hip, thigh: a.girths?.thigh, inseam: a.inseamCm };
+  const g = a.girths || {};
+  const est = { shoulder: a.shoulderWidthCm, chest: g.chest, waist: g.waist, hip: g.hip, thigh: g.thigh, inseam: a.inseamCm };
   const filled = Object.keys(est).filter((k) => state.body[k] != null && est[k] != null);
   if (filled.length && !confirm('이미 입력한 치수가 있어요. 사진 추정치로 바꿀까요?\n(줄자로 잰 값이 더 정확해요)')) return;
   for (const [k, v] of Object.entries(est)) if (v != null) state.body[k] = v;

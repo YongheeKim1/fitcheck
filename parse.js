@@ -5,6 +5,7 @@
 //   1) 가로형: 헤더 줄(사이즈 허리 허벅지 ...) + 사이즈별 줄
 //   2) 세로형: 사이즈 줄(S M L) + 부위별 줄(허리 38 40 42)
 //   3) 셀마다 줄바꿈된 형태(웹페이지 표를 복사하면 종종 이렇게 나온다)
+// 하의(허리·허벅지·밑위...)와 상의(어깨·가슴·소매...)를 모두 읽고, 어느 쪽인지 category로 알려 준다
 (function (root) {
   // OCR이 한글 글자 사이에 공백을 넣는 경우가 많아 글자 사이 공백을 허용한다
   const kw = (word) => word.split('').map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s*');
@@ -14,22 +15,38 @@
   // key: null 은 표에는 있지만 앱에서 쓰지 않는 열(숫자 자리만 차지)
   // 허벅치·밑의·종장 등은 OCR이 자주 잘못 읽는 형태
   const COLUMNS = [
-    { key: null, re: re('뒷밑위', '뒤밑위', '인심', '안기장', '안쪽기장', '무릎', '종아리', 'inseam', 'knee') },
+    { key: null, re: re('뒷밑위', '뒤밑위', '인심', '안기장', '안쪽기장', '무릎', '종아리', 'inseam', 'knee',
+      '소매통', '소매단', '소매폭', '소매둘레', '암홀', '진동', '화장', '팔통', '목너비', '넥') },
     { key: 'size', re: re('사이즈', '호칭', '치수', 'size') },
     { key: 'waist', re: re('허리', 'waist') },
     { key: 'hip', re: re('엉덩이', '힙', 'hip') },
     { key: 'thigh', re: re('허벅지', '허벅치', 'thigh') },
     { key: 'rise', re: re('앞밑위', '밑위', '밑의', 'rise') },
     { key: 'hem', re: re('밑단', '밑통', 'hem') },
+    // 가슴·어깨는 뒤에 붙은 "둘레/단면"을 따로 확인해야 해서 짧게 잡는다
+    { key: 'shoulder', re: re('어깨', 'shoulder') },
+    { key: 'chest', re: re('가슴', 'chest', 'bust') },
+    { key: 'sleeve', re: re('소매길이', '소매기장', '소매', '팔길이', 'sleeve') },
     { key: 'length', re: re('총기장', '총장', '종장', '총징', '바지길이', '기장', 'length') },
   ];
 
-  const GIRTH = ['waist', 'hip', 'thigh', 'hem'];
-  // 단면이라면 이 값을 넘기 어렵다 → 넘으면 둘레로 보고 반으로 나눈다
-  const CIRC_THRESHOLD = { waist: 55, hip: 70, thigh: 45, hem: 35 };
+  const GIRTH = ['waist', 'hip', 'thigh', 'hem', 'chest'];
+  // 단면이라면 이 값을 넘기 어렵다 → 넘으면 둘레로 보고 반으로 나눈다 (어깨너비는 원래 전체 폭이라 제외)
+  const CIRC_THRESHOLD = {
+    bottom: { waist: 55, hip: 70, thigh: 45, hem: 35, chest: 85 },
+    top: { waist: 75, hip: 80, thigh: 45, hem: 85, chest: 85 },
+  };
   // 단면 기준 상식적인 범위. 벗어나면 OCR 오인식으로 보고 버린다
-  const RANGE = { waist: [20, 70], hip: [25, 80], thigh: [12, 55], rise: [15, 45], hem: [7, 45], length: [30, 135] };
-  const LABEL = { waist: '허리', hip: '엉덩이', thigh: '허벅지', rise: '밑위', hem: '밑단', length: '총장' };
+  const RANGE = {
+    bottom: { waist: [20, 70], hip: [25, 80], thigh: [12, 55], rise: [15, 45], hem: [7, 45], length: [30, 135] },
+    top: { shoulder: [28, 80], chest: [30, 90], sleeve: [8, 95], hem: [30, 90], waist: [25, 80], length: [35, 110] },
+  };
+  const LABEL = {
+    waist: '허리', hip: '엉덩이', thigh: '허벅지', rise: '밑위', hem: '밑단',
+    shoulder: '어깨', chest: '가슴', sleeve: '소매', length: '총장',
+  };
+  const TOP_KEYS = ['shoulder', 'chest', 'sleeve'];
+  const BOTTOM_KEYS = ['waist', 'thigh', 'rise', 'hip'];
 
   function findColumns(line) {
     const taken = [];
@@ -189,11 +206,16 @@
     }
     if (!result || !result.rows.length) result = parseCellPerLine(text) || result;
     if (!result || !result.rows.length) {
-      return { rows: [], parts: [], warnings: ['사이즈표를 찾지 못했어요. 허리·허벅지 같은 항목 이름이 포함돼 있는지 확인해 주세요.'] };
+      return { rows: [], parts: [], category: null, warnings: ['사이즈표를 찾지 못했어요. 허리·가슴 같은 항목 이름이 포함돼 있는지 확인해 주세요.'] };
     }
 
     const { rows, cols, shortRows } = result;
     if (shortRows) warnings.push(`${shortRows}개 행은 숫자가 모자라요. 빠진 칸이 없는지 확인해 주세요.`);
+
+    // 상의/하의 판별: 어깨·가슴·소매가 더 많이 보이면 상의
+    const has = (k) => rows.some((r) => r[k] != null);
+    const category = TOP_KEYS.filter(has).length > BOTTOM_KEYS.filter(has).length ? 'top' : 'bottom';
+    const range = RANGE[category];
 
     // 둘레 → 단면 변환, 범위 밖 값 제거
     const halved = new Set();
@@ -203,15 +225,17 @@
       if (!vals.length) continue;
       const headerSaysCirc = cols.some((c) => c.key === key && c.circ);
       const median = vals.slice().sort((a, b) => a - b)[Math.floor(vals.length / 2)];
-      if (headerSaysCirc || median > CIRC_THRESHOLD[key]) {
+      if (headerSaysCirc || median > CIRC_THRESHOLD[category][key]) {
         rows.forEach((r) => { if (r[key] != null) r[key] = Math.round((r[key] / 2) * 10) / 10; });
         halved.add(LABEL[key]);
       }
     }
-    const inRange = (key, v) => v >= RANGE[key][0] && v <= RANGE[key][1];
+    const inRange = (key, v) => v >= range[key][0] && v <= range[key][1];
     for (const r of rows) {
-      for (const key of Object.keys(RANGE)) {
-        if (r[key] == null || inRange(key, r[key])) continue;
+      for (const key of Object.keys(LABEL)) {
+        if (r[key] == null) continue;
+        if (!range[key]) { delete r[key]; continue; } // 다른 종류 옷의 항목(상의 표의 허벅지 등)
+        if (inRange(key, r[key])) continue;
         // 소수점이 빠진 경우(44.5 → 445) 복구
         if (inRange(key, r[key] / 10)) {
           r[key] /= 10;
@@ -232,7 +256,7 @@
 
     const parts = Object.keys(LABEL).filter((k) => rows.some((r) => r[k] != null));
     const cleanRows = rows.filter((r) => parts.some((k) => r[k] != null));
-    return { rows: cleanRows, parts: parts.map((k) => LABEL[k]), warnings };
+    return { rows: cleanRows, parts: parts.map((k) => LABEL[k]), warnings, category };
   }
 
   root.parseSizeChart = parseSizeChart;
