@@ -109,6 +109,7 @@
   //   2) 사진 속 명암(원래 입은 옷의 주름·그림자)을 새 옷 색에 겹쳐 입힌다(overlay)
   //   3) 옷 아래 부드러운 그림자로 몸 위에 얹힌 느낌
   let photo = null; // draw()가 옷을 그리기 전에 찍어 둔 화면(사진 또는 카메라 프레임)
+  let shadeK = 1; // 내 사진 그림자 세기(직사광일수록 크게, tryon.js의 shadowStrength)
   let noMarks = false; // 옷 사진 입히기 모드에서는 끼는 곳 표시선을 생략
   const canMakeCanvas = typeof document !== 'undefined';
   const bufs = {};
@@ -449,7 +450,7 @@
     S.globalCompositeOperation = 'source-over';
     L.save();
     L.globalCompositeOperation = 'overlay';
-    L.globalAlpha = 0.18; // 옷 사진에 이미 주름이 있으니 내 사진 명암은 아주 약하게
+    L.globalAlpha = Math.min(0.32, 0.18 * shadeK); // 옷 사진에 이미 주름이 있으니 내 사진 명암은 약하게(그림자가 진한 사진이면 조금 더)
     L.drawImage(sh, 0, 0);
     L.restore();
     ctx.save();
@@ -1298,6 +1299,7 @@
       pg.clearRect(0, 0, photo.width, photo.height);
       pg.drawImage(ctx.canvas, 0, 0);
     }
+    shadeK = opts.scene?.shadeK ?? 1;
     const drawFn = opts.category === 'top' ? drawTop : drawBottom;
     noMarks = !!(opts.texture && opts.texture.category === opts.category);
     if (!(opts.scene && photo)) return drawFn(ctx, opts);

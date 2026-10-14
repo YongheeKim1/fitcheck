@@ -148,7 +148,48 @@ async function segmentScene(canvas) {
     head: layer((c) => c === 1 || c === 3), // 머리카락·얼굴
     skin: layer((c) => c === 2),            // 몸 피부(손·팔)
     illum: estimateIllum(src.data, W, H, (x, y) => cat[Math.floor((y * h) / H) * w + Math.floor((x * w) / W)] === 0),
+    // 빛 방향: 옷·피부의 줄마다 왼쪽→오른쪽 밝기 기울기
+    tilt: rowTilt(src.data, W, H, (x, y) => { const c = cat[Math.floor((y * h) / H) * w + Math.floor((x * w) / W)]; return c === 2 || c === 4; }),
+    // 그림자 세기: 피부 밝기의 퍼짐(밝은 쪽 90% / 어두운 쪽 10%). 직사광일수록 크다
+    shadeK: shadowStrength(src.data, W, H, (x, y) => cat[Math.floor((y * h) / H) * w + Math.floor((x * w) / W)] === 2),
   };
+}
+
+// 줄마다 "가장 왼쪽 → 가장 오른쪽까지 밝기가 몇 % 바뀌는지"를 재서 중앙값을 낸다(+면 오른쪽이 밝다).
+// 줄 안에서만 비교하므로 위아래로 색이 다른 상의·바지 경계에 속지 않는다
+function rowTilt(d, W, H, isIn) {
+  const rel = [];
+  for (let y = 0; y < H; y += 3) {
+    let n = 0, sx = 0, sl = 0, sxx = 0, sxl = 0, x0 = Infinity, x1 = -Infinity;
+    for (let x = 0; x < W; x += 2) {
+      if (!isIn(x, y)) continue;
+      const i = (y * W + x) * 4;
+      const L = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      n++; sx += x; sl += L; sxx += x * x; sxl += x * L;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+    }
+    if (n < 15 || x1 - x0 < W * 0.05) continue;
+    const mx = sx / n, ml = sl / n, vx = sxx / n - mx * mx;
+    if (vx <= 0 || ml < 8) continue;
+    rel.push((((sxl / n - mx * ml) / vx) * (x1 - x0)) / ml);
+  }
+  if (rel.length < 8) return 0;
+  rel.sort((a, b) => a - b);
+  return Math.max(-0.6, Math.min(0.6, rel[Math.floor(rel.length / 2)]));
+}
+
+function shadowStrength(d, W, H, isIn) {
+  const L = [];
+  for (let y = 0; y < H; y += 3) for (let x = 0; x < W; x += 3) {
+    if (!isIn(x, y)) continue;
+    const i = (y * W + x) * 4;
+    L.push(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+  }
+  if (L.length < 60) return 1;
+  L.sort((a, b) => a - b);
+  const ratio = L[Math.floor(L.length * 0.9)] / Math.max(8, L[Math.floor(L.length * 0.1)]);
+  return Math.max(0.6, Math.min(1.8, (ratio - 1) / 0.5)); // 1.5배 퍼짐을 보통(1)으로
 }
 
 // 조명 색 추정: 배경에서 가장 밝은 5% 픽셀의 평균(흰 벽·흰 배경이 조명 색을 띤다고 본다)
@@ -170,13 +211,16 @@ function estimateIllum(d, W, H, isBg) {
 
 // 옷 사진의 조명 색·밝기를 내 사진 조명에 맞춘다(사진마다 한 번 계산해 둔다)
 function harmonizedTexture(g, scene) {
-  if (!g.illum || !scene?.illum) return g.texture;
+  if (!scene) return g.texture;
   if (g._harm?.scene === scene) return g._harm.canvas;
-  const gains = scene.illum.rgb.map((v, k) => v / Math.max(1, g.illum.rgb[k]));
-  const mean = (gains[0] + gains[1] + gains[2]) / 3;
-  // 색 차이는 다 맞추되, 밝기는 절반만(검은 옷이 회색이 되지 않게) 0.75~1.25배 안에서
-  const expo = Math.min(1.25, Math.max(0.75, Math.sqrt(scene.illum.Y / Math.max(1, g.illum.Y))));
-  const k = gains.map((v) => (v / mean) * expo);
+  let k = [1, 1, 1];
+  if (g.illum && scene.illum) {
+    const gains = scene.illum.rgb.map((v, j) => v / Math.max(1, g.illum.rgb[j]));
+    const mean = (gains[0] + gains[1] + gains[2]) / 3;
+    // 색 차이는 다 맞추되, 밝기는 절반만(검은 옷이 회색이 되지 않게) 0.75~1.25배 안에서
+    const expo = Math.min(1.25, Math.max(0.75, Math.sqrt(scene.illum.Y / Math.max(1, g.illum.Y))));
+    k = gains.map((v) => (v / mean) * expo);
+  }
   const W = g.texture.width, H = g.texture.height;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -184,10 +228,24 @@ function harmonizedTexture(g, scene) {
   cg.drawImage(g.texture, 0, 0);
   const img = cg.getImageData(0, 0, W, H);
   const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    if (!d[i + 3]) continue;
-    d[i] = Math.min(255, d[i] * k[0]); d[i + 1] = Math.min(255, d[i + 1] * k[1]); d[i + 2] = Math.min(255, d[i + 2] * k[2]);
+  // 빛 방향: 상품 사진의 좌우 밝기 기울기는 걷어내고 내 사진의 기울기를 입힌다(줄마다 옷 폭 기준)
+  const tp = rowTilt(d, W, H, (x, y) => d[(y * W + x) * 4 + 3] > 0);
+  const tu = (scene.tilt || 0) * 0.85;
+  const relight = Math.abs(tp) > 0.02 || Math.abs(tu) > 0.02;
+  // 기준 폭은 옷 전체(줄마다 재면 소매 있는 줄과 없는 줄의 밝기가 달라져 가로 띠가 생긴다)
+  let x0 = W, x1 = -1;
+  if (relight) for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) if (d[(y * W + x) * 4 + 3]) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
+  const cx = (x0 + x1) / 2, wd = Math.max(1, x1 - x0);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      if (!d[i + 3]) continue;
+      const t = relight && x1 > x0 ? (x - cx) / wd : 0;
+      const f = Math.min(1.4, Math.max(0.7, (1 + tu * t) / (1 + tp * t)));
+      d[i] = Math.min(255, d[i] * k[0] * f); d[i + 1] = Math.min(255, d[i + 1] * k[1] * f); d[i + 2] = Math.min(255, d[i + 2] * k[2] * f);
+    }
   }
+  g._tilt = { tp, tu };
   cg.putImageData(img, 0, 0);
   g._harm = { scene, canvas: c };
   return c;
