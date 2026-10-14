@@ -50,18 +50,14 @@ create table if not exists public.fc_closet_items (
   primary key (user_id, id)
 );
 
--- 설정: signup_code(가입 코드)
-create table if not exists public.fc_config (
-  key   text primary key,
-  value text not null
-);
+-- 가입 코드는 쓰지 않는다(누구나 가입 가능). 예전 버전에서 만든 설정 테이블은 지운다
+drop table if exists public.fc_config;
 
 alter table public.fc_users        enable row level security;
 alter table public.fc_sessions     enable row level security;
 alter table public.fc_profiles     enable row level security;
 alter table public.fc_closet_items enable row level security;
-alter table public.fc_config       enable row level security;
-revoke all on public.fc_users, public.fc_sessions, public.fc_profiles, public.fc_closet_items, public.fc_config from anon, authenticated;
+revoke all on public.fc_users, public.fc_sessions, public.fc_profiles, public.fc_closet_items from anon, authenticated;
 
 -- ---------- 내부 함수 ----------
 -- 세션 토큰 → 사용자 id. 없거나 만료면 오류
@@ -95,23 +91,16 @@ begin
 end $$;
 
 -- ---------- 공개 함수(브라우저가 호출) ----------
-create or replace function public.fc_signup(p_login text, p_password text, p_name text, p_code text)
+drop function if exists public.fc_signup(text, text, text, text); -- 예전 버전(가입 코드 인자 있음)
+
+create or replace function public.fc_signup(p_login text, p_password text, p_name text)
 returns json
 language plpgsql security definer set search_path = public, extensions
 as $$
 declare
   v_login text := lower(trim(p_login));
-  v_code  text;
   v_user  uuid;
 begin
-  -- 가입 코드가 설정돼 있지 않으면 가입을 막는다(공개 사이트라 모르는 사람이 가입하지 못하게)
-  select value into v_code from fc_config where key = 'signup_code';
-  if v_code is null then
-    raise exception 'FC_INPUT: 아직 가입이 열려 있지 않아요. 관리자에게 가입 코드 설정을 요청하세요.';
-  end if;
-  if coalesce(p_code, '') <> v_code then
-    raise exception 'FC_INPUT: 가입 코드가 맞지 않아요.';
-  end if;
   if v_login !~ '^[a-z0-9_.-]{3,30}$' then
     raise exception 'FC_INPUT: 아이디는 영문 소문자·숫자·_.- 로 3~30자예요.';
   end if;
@@ -236,12 +225,6 @@ end $$;
 -- ---------- 권한: 브라우저는 공개 함수만 ----------
 revoke execute on function public.fc_auth(text), public.fc_new_session(uuid) from public, anon, authenticated;
 grant execute on function
-  public.fc_signup(text, text, text, text), public.fc_login(text, text), public.fc_logout(text),
+  public.fc_signup(text, text, text), public.fc_login(text, text), public.fc_logout(text),
   public.fc_pull(text), public.fc_push(text, jsonb, jsonb), public.fc_delete_account(text, text)
   to anon, authenticated;
-
--- ---------- 가입 코드 ----------
--- 이 파일은 공개 저장소에 있으므로 가입 코드를 여기에 쓰지 않는다.
--- SQL Editor에서 따로 한 번 실행한다(코드는 가족·친구에게만 알려 줄 값으로):
---   insert into public.fc_config(key, value) values ('signup_code', '내가-정한-코드')
---   on conflict (key) do update set value = excluded.value;

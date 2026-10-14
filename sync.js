@@ -160,58 +160,70 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && document
   }
 
   // ---------- 화면 ----------
+  // 로그인 전에는 전체 화면 로그인 창(#auth-screen)만 보이고, 로그인하면 앱이 열린다.
+  // 내 체형 탭의 계정 카드(#account)는 로그인한 뒤의 상태·로그아웃·계정 삭제만 보여 준다.
   let mode = 'login';
 
+  function renderAuthScreen() {
+    const screen = $('#auth-screen');
+    const locked = configured() && !auth;
+    screen.classList.toggle('hidden', !locked);
+    document.body.classList.toggle('locked', locked);
+    if (!locked) return;
+    const signup = mode === 'signup';
+    screen.innerHTML = `
+      <div class="auth-box">
+        <h1>핏체크</h1>
+        <p class="hint">내 몸에 맞는 옷 핏을 미리 확인해요</p>
+        <div class="segment" id="acc-mode">
+          <button type="button" data-mode="login" class="${signup ? '' : 'active'}">로그인</button>
+          <button type="button" data-mode="signup" class="${signup ? 'active' : ''}">가입</button>
+        </div>
+        <form id="acc-form">
+          <label class="field">아이디<input id="acc-login" autocomplete="username" autocapitalize="none" required></label>
+          <label class="field">비밀번호<input id="acc-pw" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" required></label>
+          ${signup ? `
+            <label class="field">이름<input id="acc-name" autocomplete="name" required></label>
+            <p class="hint">아이디는 영문 소문자·숫자 3~30자, 비밀번호는 8자 이상이에요.</p>` : ''}
+          <button type="submit" class="primary block">${signup ? '가입하기' : '로그인'}</button>
+          <p class="hint import-status" id="acc-status"></p>
+        </form>
+        <p class="hint">로그인하면 폰과 PC에서 같은 데이터를 써요. 서버에는 숫자만 저장하고 사진은 올리지 않아요.</p>
+      </div>`;
+  }
+
   function renderAccount() {
+    renderAuthScreen();
     const box = $('#account');
     if (!configured()) {
       box.innerHTML = `<h2>계정</h2><p class="hint">서버가 아직 연결되지 않았어요. 지금은 이 기기에만 저장돼요.</p>`;
       setBadge('');
       return;
     }
-    if (auth) {
-      const when = lastSync ? lastSync.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '-';
-      box.innerHTML = `
-        <h2>계정</h2>
-        <p><b>${esc(auth.name)}</b> <span class="hint">(${esc(auth.login)})</span></p>
-        <p class="hint">마지막 동기화 ${when}${lastError ? ` · <span style="color:var(--bad)">${esc(lastError)}</span>` : ''}</p>
-        <div class="btn-row">
-          <button type="button" class="ghost" id="acc-sync">지금 동기화</button>
-          <button type="button" class="ghost" id="acc-logout">로그아웃</button>
-        </div>
-        <details class="photo-guide" style="margin-top:10px">
-          <summary>계정 삭제</summary>
-          <p class="hint">서버에 저장된 내 데이터가 모두 지워져요. 이 기기의 데이터는 남아요.</p>
-          <label class="field">비밀번호 확인<input type="password" id="acc-del-pw" autocomplete="current-password"></label>
-          <button type="button" class="ghost block" id="acc-delete">계정 삭제</button>
-        </details>`;
-      setBadge(lastError ? '동기화 안 됨' : lastSync ? `동기화 ${when}` : '');
+    if (!auth) {
+      box.innerHTML = '';
+      setBadge('');
       return;
     }
-    const signup = mode === 'signup';
+    const when = lastSync ? lastSync.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '-';
     box.innerHTML = `
       <h2>계정</h2>
-      <p class="hint">로그인하면 폰과 PC에서 같은 데이터를 써요. 서버에는 숫자만 저장하고 사진은 올리지 않아요.</p>
-      <div class="segment" id="acc-mode">
-        <button type="button" data-mode="login" class="${signup ? '' : 'active'}">로그인</button>
-        <button type="button" data-mode="signup" class="${signup ? 'active' : ''}">가입</button>
+      <p><b>${esc(auth.name)}</b> <span class="hint">(${esc(auth.login)})</span></p>
+      <p class="hint">마지막 동기화 ${when}${lastError ? ` · <span style="color:var(--bad)">${esc(lastError)}</span>` : ''}</p>
+      <div class="btn-row">
+        <button type="button" class="ghost" id="acc-sync">지금 동기화</button>
+        <button type="button" class="ghost" id="acc-logout">로그아웃</button>
       </div>
-      <form id="acc-form">
-        <label class="field">아이디<input id="acc-login" autocomplete="username" autocapitalize="none" required></label>
-        <label class="field">비밀번호<input id="acc-pw" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" required></label>
-        ${signup ? `
-          <label class="field">이름<input id="acc-name" autocomplete="name" required></label>
-          <label class="field">가입 코드<input id="acc-code" autocapitalize="none" required></label>
-          <p class="hint">아이디는 영문 소문자·숫자 3~30자, 비밀번호는 8자 이상이에요. 가입 코드는 관리자에게 받아요.</p>` : ''}
-        <button type="submit" class="primary block">${signup ? '가입하기' : '로그인'}</button>
-        <p class="hint import-status" id="acc-status"></p>
-      </form>`;
-    setBadge('');
+      <details class="photo-guide" style="margin-top:10px">
+        <summary>계정 삭제</summary>
+        <p class="hint">서버에 저장된 내 데이터가 모두 지워져요. 이 기기의 데이터는 남아요.</p>
+        <label class="field">비밀번호 확인<input type="password" id="acc-del-pw" autocomplete="current-password"></label>
+        <button type="button" class="ghost block" id="acc-delete">계정 삭제</button>
+      </details>`;
+    setBadge(lastError ? '동기화 안 됨' : lastSync ? `동기화 ${when}` : '');
   }
 
   $('#account').addEventListener('click', async (e) => {
-    const m = e.target.dataset.mode;
-    if (m) { mode = m; renderAccount(); return; }
     if (e.target.id === 'acc-sync') syncNow();
     if (e.target.id === 'acc-logout') {
       const wipe = confirm('로그아웃할게요.\n이 기기에 저장된 내 데이터도 지울까요?\n(다른 사람과 같이 쓰는 기기라면 "확인")');
@@ -224,6 +236,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && document
         return;
       }
       lastSync = null;
+      mode = 'login';
       renderAccount();
     }
     if (e.target.id === 'acc-delete') {
@@ -233,6 +246,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && document
         await rpc('fc_delete_account', { p_token: auth.token, p_password: pw });
         auth = null;
         saveAuth();
+        mode = 'login';
         renderAccount();
         alert('계정을 삭제했어요.');
       } catch (err) {
@@ -241,7 +255,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && document
     }
   });
 
-  $('#account').addEventListener('submit', async (e) => {
+  $('#auth-screen').addEventListener('click', (e) => {
+    const m = e.target.dataset.mode;
+    if (m) { mode = m; renderAuthScreen(); }
+  });
+
+  $('#auth-screen').addEventListener('submit', async (e) => {
     e.preventDefault();
     const status = $('#acc-status');
     const btn = e.target.querySelector('button[type=submit]');
@@ -252,7 +271,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && document
       const login = $('#acc-login').value;
       const pw = $('#acc-pw').value;
       const res = mode === 'signup'
-        ? await rpc('fc_signup', { p_login: login, p_password: pw, p_name: $('#acc-name').value, p_code: $('#acc-code').value })
+        ? await rpc('fc_signup', { p_login: login, p_password: pw, p_name: $('#acc-name').value })
         : await rpc('fc_login', { p_login: login, p_password: pw });
       auth = { token: res.token, login: res.login, name: res.name };
       saveAuth();
