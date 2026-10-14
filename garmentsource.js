@@ -368,7 +368,9 @@ function fromModelPhoto(pose, W, H, clothes, img, category) {
       const innerLimit = (p) => Math.max(4, Math.abs(p.x - cx) - shoulderW * 0.35); // 몸통 쪽으로 너무 파고들지 않게
       return { ribbon: ribbonAlong(mask, path, end, 10, outward, shoulderW * 0.5, innerLimit), lengthPx: end };
     });
-    return { kind: 'model', mask, ribbons: { torso: torsoRibbon, sleeves } };
+    // 몸판 띠 맨 윗줄(0)~겨드랑이 줄(4) 사이에서 어깨 관절이 있는 위치(0~1): 내 사진의 어깨선에 맞춰 기울일 때 쓴다
+    const shoulderFrac = Math.min(0.8, Math.max(0, (shMid.y - topY) / (armpitY - topY)));
+    return { kind: 'model', mask, ribbons: { torso: torsoRibbon, sleeves, shoulderFrac } };
   }
 
   // 하의: 허리 → 가랑이(몸판 띠) + 다리 두 개

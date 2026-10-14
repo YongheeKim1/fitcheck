@@ -308,8 +308,44 @@
     }
   }
 
+  // 주름: 흐린 어두운 선 + 그 옆의 흐린 밝은 선(접힌 천의 그늘과 빛). 옷 모양 안에만 그린다(source-atop).
+  // 흐림은 ctx.filter 대신 그림자로 만든다(아이폰 사파리도 되게): 선은 화면 밖에 그리고 그림자만 제자리로 옮긴다
+  // folds: [{ pts: [점들], w: 선 굵기, blur, a: 진하기(0~1), hl: 밝은 선을 둘 방향·거리(V) }]
+  function drawFolds(g, folds) {
+    if (!folds || !folds.length) return;
+    const off = g.canvas.width * 4;
+    g.save();
+    g.globalCompositeOperation = 'source-atop';
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.strokeStyle = '#000';
+    for (const f of folds) {
+      if (!f.pts || f.pts.length < 2 || !(f.a > 0.01)) continue;
+      const passes = [[`rgba(0,0,0,${f.a.toFixed(3)})`, 0, 0]];
+      if (f.hl) passes.push([`rgba(255,255,255,${(f.a * 0.5).toFixed(3)})`, f.hl.x, f.hl.y]);
+      for (const [col, dx, dy] of passes) {
+        g.shadowColor = col;
+        g.shadowBlur = f.blur;
+        g.shadowOffsetX = off + dx;
+        g.shadowOffsetY = dy;
+        g.lineWidth = f.w;
+        g.beginPath();
+        smoothPath(g, f.pts.map((p) => V(p.x - off, p.y)), false);
+        g.stroke();
+      }
+    }
+    g.restore();
+  }
+
+  // 띠 단면 하나(c: 가운데, nrm: 바깥쪽 단위 벡터, w: 폭)에서 폭 비율 a~b를 가로지르는 처진 호(점 3개)
+  function across(c, nrm, w, a, b, sag) {
+    const down = V(-nrm.y, nrm.x).y >= 0 ? V(-nrm.y, nrm.x) : V(nrm.y, -nrm.x); // 화면 아래쪽 방향
+    const p = (t) => add(c, mul(nrm, w * t));
+    return [p(a), add(p((a + b) / 2), mul(down, w * sag)), p(b)];
+  }
+
   // pairs: [{ src: 원본 띠, dst: 목표 띠 }]. 실측 크기로 휜 옷 사진에 내 사진 명암을 살짝 입히고 그림자와 함께 얹는다
-  function paintTexture(ctx, img, pairs) {
+  function paintTexture(ctx, img, pairs, folds) {
     if (!(canMakeCanvas && ctx.canvas && photo)) return false;
     const W = ctx.canvas.width, H = ctx.canvas.height;
     const layer = buf('layer', W, H);
@@ -374,6 +410,7 @@
       L.drawImage(gf, 0, 0);
       L.restore();
     }
+    drawFolds(L, folds);
     // 둥근 몸에 감긴 느낌: 옷 가장자리로 갈수록 살짝 어둡게(외곽을 크게 흐린 알파의 반대값)
     const k = 24;
     const sw = Math.max(1, Math.round(W / k)), shh = Math.max(1, Math.round(H / k));
@@ -584,6 +621,39 @@
       }
       if (n > 50) origC = [r / n, g2 / n, b / n];
     }
+    // 발목: 무릎→발꿈치 선에서 발목 반지름 안쪽만 살. 바지 폭 전체를 살색으로 칠하면 발목이 뚱뚱해 보인다
+    const segDist = (x, y, a, b) => {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(x - a.x - dx * t, y - a.y - dy * t);
+    };
+    const inAnkle = (x, y) => geo.ankles.legs.some(([a, b]) => segDist(x, y, a, b) < geo.ankles.r);
+    // 새 바지 밑단 아래(발목까지) 원래 바지 / 새 바지 허리 위(허리선 아래) 원래 바지
+    const belowHem = (x, y) => origC && gBottom[x] >= 0 && y > gBottom[x] && y <= geo.ankles.yMax;
+    let gTop = null;
+    if (geo.ankles) {
+      gTop = new Int32Array(W).fill(-1);
+      for (let x = 0; x < W; x++) for (let y = 0; y < H; y++) if (gA[(y * W + x) * 4 + 3] > 25) { gTop[x] = y; break; }
+    }
+    // 내 상의도 같은 "옷"으로 잡히므로, 다리 쪽에서 잰 원래 바지 색과 비슷한 픽셀만 원래 바지로 본다
+    const nearOrig = (x, y, t) => {
+      const i = (y * W + x) * 4;
+      return Math.hypot(src[i] - origC[0], src[i + 1] - origC[1], src[i + 2] - origC[2]) < t;
+    };
+    // 내 상의 색: 허리선 바로 위 옷 픽셀 평균. 허리선 아래 옷 픽셀은 상의/원래 바지 중 더 가까운 쪽으로 나눈다
+    let topC = null;
+    if (origC) {
+      let r = 0, g2 = 0, b = 0, n = 0;
+      const span = Math.round(H / 30);
+      for (let y = Math.max(0, Math.round(geo.bandTop) - span); y < geo.bandTop; y++) for (let x = 0; x < W; x += 2) {
+        const i = (y * W + x) * 4;
+        if (bA[i + 3] > 100 && catAt(x, y) === 4) { r += src[i]; g2 += src[i + 1]; b += src[i + 2]; n++; }
+      }
+      if (n > 30) topC = [r / n, g2 / n, b / n];
+    }
+    const dist = (x, y, c) => { const i = (y * W + x) * 4; return Math.hypot(src[i] - c[0], src[i + 1] - c[1], src[i + 2] - c[2]); };
+    const aboveWaist = (x, y) => origC && gTop[x] >= 0 && y < gTop[x] && y >= geo.bandTop && catAt(x, y) === 4
+      && (topC ? dist(x, y, origC) < dist(x, y, topC) : nearOrig(x, y, 55));
     const isOrig = (x, y) => {
       if (catAt(x, y) === 4) return true;
       if (!origC || gBottom[x] < 0 || y <= gBottom[x] || y > geo.ankles.yMax) return false;
@@ -593,7 +663,9 @@
     const hole = (x, y) => {
       if (y < z0 || y > z1) return false;
       const k = (y * W + x) * 4 + 3;
-      if (gA[k] > 25 || bA[k] > 100) return false;
+      if (gA[k] > 25) return false;
+      // 몸 안쪽이라도: 허리 위로 드러난 원래 바지, 발목 밖으로 남은 원래 바지는 지운다
+      if (bA[k] > 100) return (!topC && aboveWaist(x, y)) || (belowHem(x, y) && !inAnkle(x, y) && isOrig(x, y));
       return isOrig(x, y); // 원래 옷
     };
     let box = null;
@@ -603,6 +675,39 @@
         if (!box) box = { x0: x, y0: y, x1: x, y1: y };
         else { box.x0 = Math.min(box.x0, x); box.y0 = Math.min(box.y0, y); box.x1 = Math.max(box.x1, x); box.y1 = Math.max(box.y1, y); }
       }
+    }
+    // 허리 위로 드러난 원래 바지: 바로 위 내 상의 색으로 칠한다(상의를 바지 위로 꺼내 입은 모습).
+    // 열마다 따로 복사하면 세로 줄무늬가 생기므로, 허리선 위 상의 띠를 가로로 넓게 평균 낸 색을 쓴다
+    if (origC && topC) {
+      const span = Math.round(H / 30), rad = Math.max(4, Math.round(W / 60));
+      const y0 = Math.max(0, Math.round(geo.bandTop) - span), y1 = Math.round(geo.bandTop);
+      const col = new Float64Array(W * 4); // 열별 상의 색 합계와 개수
+      for (let y = y0; y < y1; y++) for (let x = 0; x < W; x++) {
+        const i2 = (y * W + x) * 4;
+        if (bA[i2 + 3] <= 100 || catAt(x, y) !== 4 || dist(x, y, topC) > 60) continue;
+        col[x * 4] += src[i2]; col[x * 4 + 1] += src[i2 + 1]; col[x * 4 + 2] += src[i2 + 2]; col[x * 4 + 3]++;
+      }
+      const prof = [];
+      for (let x = 0; x < W; x++) {
+        let r = 0, g2 = 0, b = 0, n = 0;
+        for (let k = Math.max(0, x - rad); k <= Math.min(W - 1, x + rad); k++) { r += col[k * 4]; g2 += col[k * 4 + 1]; b += col[k * 4 + 2]; n += col[k * 4 + 3]; }
+        prof.push(n > 3 ? [r / n, g2 / n, b / n] : topC);
+      }
+      const img = ctx.getImageData(0, 0, W, H);
+      const d = img.data;
+      let any = false;
+      for (let x = 0; x < W; x++) {
+        if (gTop[x] < 0) continue;
+        let started = false; // 이 열에서 원래 바지가 처음 나온 뒤로는 옷 픽셀을 모두 칠한다(박음질·밝은 점이 남지 않게)
+        for (let y = Math.max(0, y1); y < gTop[x]; y++) {
+          if (!started && aboveWaist(x, y)) started = true;
+          if (!started || catAt(x, y) !== 4) continue;
+          const i2 = (y * W + x) * 4, c = prof[x];
+          d[i2] = c[0]; d[i2 + 1] = c[1]; d[i2 + 2] = c[2];
+          any = true;
+        }
+      }
+      if (any) ctx.putImageData(img, 0, 0);
     }
     // 새 바지가 원래 바지보다 짧으면 밑단 아래로 원래 바지가 보인다 → 발목 살색으로(원래 바지의 명암은 살린다)
     if (geo.ankles && scene.skinColor) {
@@ -614,7 +719,7 @@
         if (gBottom[x] < 0) continue;
         for (let y = gBottom[x] + 1; y < H; y++) {
           const i = y * W + x;
-          if (bA[i * 4 + 3] <= 100 || y > geo.ankles.yMax || !isOrig(x, y)) continue;
+          if (y > geo.ankles.yMax || !inAnkle(x, y) || !isOrig(x, y)) continue;
           ank.push(i);
           lum += d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2];
         }
@@ -634,7 +739,9 @@
       box = { x0: Math.max(0, box.x0 - pad), y0: Math.max(0, box.y0 - pad), x1: Math.min(W - 1, box.x1 + pad), y1: Math.min(H - 1, box.y1 + pad) };
       const img = ctx.getImageData(0, 0, W, H);
       // 새 옷 아래에 깔린 원래 옷 픽셀도 채움 재료에서 뺀다(안 그러면 지운 자리가 원래 옷 색으로 다시 채워진다)
-      const under = (x, y) => gA[(y * W + x) * 4 + 3] > 25 && scene.cat[Math.floor(y * sy) * scene.w + Math.floor(x * sx)] === 4;
+      // 다리 아래쪽은 분할이 원래 바지를 배경으로 볼 때가 있어 색으로도 거른다
+      const legY = (z0 + H) / 2;
+      const under = (x, y) => gA[(y * W + x) * 4 + 3] > 25 && (catAt(x, y) === 4 || (origC && y > legY && nearOrig(x, y, 70)));
       inpaint(img, W, (x, y) => hole(x, y) || under(x, y), box);
       ctx.putImageData(img, 0, 0);
     }
@@ -681,6 +788,61 @@
   const cmText = (v) => `${Math.round(Math.abs(v))}cm`;
 
   // ---------------- 바지 ----------------
+  // 바지 주름: 여유분(헐렁함)과 길이(바닥에 닿아 쌓이는지)로 위치와 진하기를 정한다
+  function legFolds(legs, s, C, u) {
+    const folds = [];
+    for (const leg of legs) {
+      const N = leg.outer.length;
+      const sec = (j) => {
+        const o = leg.outer[j], i = leg.inner[j];
+        const w = len(sub(o, i)) || 1;
+        return { c: mid(o, i), nrm: mul(sub(o, i), 1 / w), w };
+      };
+      const ease = Math.max(0, Math.min(1, (leg.tw - leg.twB) / leg.twB));
+      const soft = { w: Math.max(1, s * 0.7), blur: Math.max(2, s * 1.3) };
+      // 1) 헐렁하면 허벅지 아래로 세로로 늘어지는 주름 두 줄
+      if (ease > 0.06) {
+        const kStart = Math.max(3, Math.round((leg.kneeD / leg.L) * (N - 1)) - 2);
+        for (const off of [leg.side > 0 ? 0.22 : -0.22]) {
+          const pts = [];
+          for (let j = kStart; j < N - 2; j++) {
+            const { c, nrm, w } = sec(j);
+            pts.push(add(c, mul(nrm, w * (off + 0.04 * Math.sin(j * 1.7 + off * 9)))));
+          }
+          const { nrm } = sec(Math.floor(N / 2));
+          folds.push({ pts, ...soft, a: Math.min(0.18, 0.05 + ease * 0.35), hl: mul(nrm, s * 0.9) });
+        }
+      }
+      // 2) 무릎: 살짝 처진 가로 주름 두 줄
+      const kj = Math.max(2, Math.min(N - 3, Math.round((leg.kneeD / leg.L) * (N - 1))));
+      for (const [dj, a0, a1] of [[-0.6, -0.3, 0.28], [0.35, -0.22, 0.32]]) {
+        const j = Math.max(1, Math.min(N - 2, Math.round(kj + dj)));
+        const { c, nrm, w } = sec(j);
+        folds.push({ pts: across(c, nrm, w, a0, a1, 0.06), ...soft, a: 0.1 + ease * 0.12, hl: mul(u, s * 0.8) });
+      }
+      // 3) 밑단이 발목보다 길면 남는 길이만큼 밑단 위에 주름이 쌓인다(바닥에 닿으면 더 많이)
+      const extraCm = (leg.L - leg.ankleAt) / s;
+      const floorHits = leg.pts.filter((q) => q.p.y >= leg.floorY - 0.5).length;
+      const stack = Math.min(4, Math.max(0, Math.round(extraCm / 2.5)) + Math.max(0, floorHits - 1));
+      for (let k = 0; k < stack; k++) {
+        const j = Math.max(1, N - 2 - k);
+        const { c, nrm, w } = sec(j);
+        const zig = k % 2 ? 0.07 : -0.05;
+        folds.push({ pts: [add(c, mul(nrm, -w * 0.42)), add(add(c, mul(nrm, -w * 0.1)), mul(u, w * zig)), add(add(c, mul(nrm, w * 0.15)), mul(u, -w * zig)), add(c, mul(nrm, w * 0.42))],
+          ...soft, a: 0.2, hl: mul(u, s * 0.9) });
+      }
+      // 4) 가랑이에서 허벅지 바깥으로 비스듬히 퍼지는 짧은 주름(몸에 붙는 바지일수록 진하게)
+      if (ease < 0.25) {
+        for (const t of [0.15, 0.45]) {
+          const { c, nrm, w } = sec(Math.min(N - 1, 2));
+          const from = add(C, mul(u, s * (1 + t * 3)));
+          folds.push({ pts: [from, add(c, mul(nrm, w * (t - 0.1)))], ...soft, a: 0.1 * (1 - ease * 3), hl: mul(u, s * 0.7) });
+        }
+      }
+    }
+    return folds;
+  }
+
   function drawBottom(ctx, o) {
     const { pxPerCm: s, color } = o;
     const { g, guessed } = fillBottom(o.g);
@@ -735,7 +897,7 @@
         outer.push(add(p, mul(nl, side * w)));
         inner.push(sub(p, mul(nl, side * w)));
       });
-      return { side, outer, inner, L, polyLen, ankleAt, tight: 2 * g.thigh * give < body.thigh, twB, start };
+      return { side, outer, inner, L, polyLen, ankleAt, kneeD: kneeAt * polyLen, floorY, pts, tw, tight: 2 * g.thigh * give < body.thigh, twB, start };
     }).sort((a, b) => b.side - a.side); // +쪽 다리 먼저
 
     const [pos, neg] = legs;
@@ -776,7 +938,7 @@
       const ext = ((dC - D0) * 2) / 6; // 가랑이 아래로 겹치는 길이
       const fade = rows > 6 ? { from: sub(C, mul(u, ext * 0.15)), to: add(C, mul(u, ext * 0.95)) } : null;
       pairs.push({ src: tex.ribbons.waist.slice(0, rows + 1), dst, fade, fill: true });
-      paintTexture(ctx, tex.texture, pairs);
+      paintTexture(ctx, tex.texture, pairs, legFolds(legs, s, C, u));
     } else {
       fillShape(ctx, [poly], color, sub(Hl, mul(n, hW / 2)), add(Hl, mul(n, hW / 2)));
     }
@@ -855,8 +1017,8 @@
     if (guessed.length) notes.push(`사이즈표에 ${guessed.join('·')} 실측이 없어서 다른 치수로 추정해 그렸어요.`);
     // 밑단 아래 원래 바지를 지울 수 있는 가장 낮은 줄: 발목과 발꿈치 사이(그 아래는 신발)
     const ankY = Math.max(P(27).y, P(28).y);
-    const ankleMax = ankY + 0.5 * Math.max(0, Math.max(P(29).y, P(30).y, P(31).y, P(32).y) - ankY);
-    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax } } };
+    const ankleMax = ankY + 0.85 * Math.max(0, Math.max(P(29).y, P(30).y, P(31).y, P(32).y) - ankY);
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax, legs: [[P(25), P(29)], [P(26), P(30)]], r: 3.6 * s }, bandTop: T.y } };
   }
 
   // ---------------- 상의 ----------------
@@ -932,6 +1094,8 @@
     const cuffs = [];
     const sleeves = [];
     const sleeveTargets = [];
+    const folds = [];
+    const soft = { w: Math.max(1, s * 0.7), blur: Math.max(2, s * 1.3) };
     if (g.sleeve != null) {
       for (const [shI, elI, wrI, fiI] of [[11, 13, 15, 19], [12, 14, 16, 20]]) {
         const side = Math.sign(dot(sub(P(shI), M), n)) || 1;
@@ -959,6 +1123,19 @@
         inner[0] = ap;
         sleeves.push([...outer, ...inner.slice().reverse()]);
         sleeveTargets.push({ startX: sp.x, rib: outer.map((p, i) => [p, inner[i]]), poly: sleeves[sleeves.length - 1] });
+        // 팔꿈치를 덮는 소매: 팔꿈치 안쪽에 짧은 주름(팔을 굽힐수록 진하게)
+        const toElbow = arcTo(tubePath, elbow);
+        if (Lc > toElbow + 3 * s) {
+          const up = norm(sub(elbow, P(shI))), fore = norm(sub(wrist, elbow));
+          const bend = Math.max(0, 1 - dot(up, fore)); // 0 = 쭉 편 팔, 1 = 직각
+          const ej = Math.max(1, Math.min(pts.length - 2, Math.round((toElbow / Lc) * (pts.length - 1))));
+          for (const dj of [-1, 0, 1]) {
+            const j = Math.max(1, Math.min(pts.length - 2, ej + dj));
+            const w = len(sub(outer[j], inner[j])) || 1;
+            const nrm = mul(sub(outer[j], inner[j]), 1 / w);
+            folds.push({ pts: across(mid(outer[j], inner[j]), nrm, w, -0.45, 0.1, 0.12), ...soft, a: 0.12 + bend * 0.35, hl: mul(pts[j].dir, s * 0.8) });
+          }
+        }
         const ck = outer.length - 2; // 끝에서 한 칸 안쪽(약 3~4cm)
         cuffs.push([outer[ck], inner[ck]]);
         if (side > 0) {
@@ -991,7 +1168,34 @@
         const D = d0 + (d1 - d0) * (k / 10);
         dst.push([atDepth(sidePoly(-1), HPS, u, D), atDepth(sidePoly(1), HPS, u, D)]);
       }
-      const pairs = [{ src: tex.ribbons.torso, dst, fill: 4 }]; // 목둘레(위 4줄)는 비워 둔다
+      // 어깨: 윗줄을 수평으로 두면 어깨가 각진 판처럼 뜬다. 몸판 윗부분(0~4줄)을 좌우 반쪽으로 나눠
+      // 가운데(목)는 그대로 두고 양 끝만 내려서, 상품 사진의 어깨 관절이 내 어깨 봉제선(seam)에 오게 한다
+      const srcT = tex.ribbons.torso;
+      const f = tex.ribbons.shoulderFrac;
+      const pairs = [];
+      if (f != null && f < 0.95) {
+        const dArm = dot(sub(armpitAt, HPS), u);
+        const yoke = [];
+        for (const sd of [-1, 1]) {
+          const dSeam = dot(sub(seam(sd), HPS), u);
+          const dTop = Math.max(0, (dSeam - f * dArm) / (1 - f));
+          const edgeTop = add(top(sd), mul(u, dTop));
+          const src = [], dd = [];
+          for (let k = 0; k <= 4; k++) {
+            const r = byX(srcT[k]);
+            const c = mid(r[0], r[1]);
+            const cd = mid(dst[k][0], dst[k][1]);
+            const e = lerpV(edgeTop, armpit(sd), k / 4);
+            const leftHalf = e.x < cd.x; // 화면 왼쪽 반쪽이면 원본도 왼쪽 반쪽
+            src.push(leftHalf ? [r[0], c] : [c, r[1]]);
+            dd.push(leftHalf ? [e, cd] : [cd, e]);
+          }
+          yoke.push({ src, dst: dd });
+        }
+        pairs.push(...yoke, { src: srcT.slice(4), dst: dst.slice(4), fill: true });
+      } else {
+        pairs.push({ src: srcT, dst, fill: 4 }); // 목둘레(위 4줄)는 비워 둔다
+      }
       // 소매: 화면 왼쪽 소매끼리, 오른쪽 소매끼리 짝짓기
       const srcSleeves = tex.ribbons.sleeves || [];
       const targets = sleeveTargets.slice().sort((a, b) => a.startX - b.startX);
@@ -1005,12 +1209,50 @@
         if (srcS) {
           const want = g.sleeve * srcPerCm;
           const f = srcPerCm > 0 && srcS.lengthPx > want * 1.1 ? want / srcS.lengthPx : 1;
-          const rib = f < 1 ? resample(srcS.ribbon, 41).slice(0, Math.max(3, Math.round(40 * f) + 1)) : srcS.ribbon;
+          let rib = f < 1 ? resample(srcS.ribbon, 41).slice(0, Math.max(3, Math.round(40 * f) + 1)) : srcS.ribbon;
+          // 팔이 몸통에 붙은 사진은 소매가 좁게 잡힌다. 그걸 넓은 소매에 펴면 가로 줄무늬가 되므로,
+          // 너무 늘려야 하면 몸판 아랫부분(무늬 없는 천)을 실제 크기 그대로 떼어 소매에 입힌다
+          const avgW = (rows) => rows.reduce((a, r) => a + len(sub(r[0], r[1])), 0) / rows.length;
+          const dstWcm = avgW(t.rib) / s;
+          const srcWcm = srcPerCm > 0 ? avgW(rib) / srcPerCm : dstWcm;
+          const ribLen = (rows) => { let L = 0; for (let j = 1; j < rows.length; j++) L += len(sub(mid(...rows[j]), mid(...rows[j - 1]))); return L; };
+          const dstLen = ribLen(t.rib);
+          const srcLcm = srcPerCm > 0 ? ribLen(rib) / srcPerCm : dstLen / s;
+          if (srcPerCm > 0 && Math.max(dstWcm / srcWcm, dstLen / s / Math.max(1, srcLcm)) > 1.5 && srcT.length >= 14) {
+            const yA = srcT[7][0].y, yB = srcT[13][0].y;
+            const cxs = (srcT[10][0].x + srcT[10][1].x) / 2;
+            const pw = Math.min(dstWcm * srcPerCm, (srcT[10][1].x - srcT[10][0].x) * 0.8);
+            const ph = Math.min((dstLen / s) * srcPerCm, yB - yA);
+            const N = t.rib.length;
+            rib = [];
+            for (let j = 0; j < N; j++) { const y = yA + (ph * j) / (N - 1); rib.push([V(cxs - pw / 2, y), V(cxs + pw / 2, y)]); }
+          }
           pairs.push({ src: rib, dst: t.rib, fill: true });
         }
         else plain.push(t.poly); // 원본에 소매가 안 보이면 옷 평균색으로
       });
-      paintTexture(ctx, tex.texture, pairs);
+      // 몸판 주름: 겨드랑이에서 가슴 쪽으로 당기는 주름, 넉넉하면 세로로 늘어지는 주름, 길면 밑단 위에 가로 주름
+      const ease = Math.max(0, Math.min(1, loose / Math.max(1, body.chest)));
+      for (const sd of [-1, 1]) {
+        const a0 = add(armpit(sd), mul(n, -sd * cw * 0.04));
+        for (const k of [0, 1]) {
+          folds.push({ pts: [a0, add(add(armpitAt, mul(n, sd * cw * (0.3 - k * 0.06))), mul(u, torso * (0.1 + k * 0.07)))], ...soft, a: 0.1 + ease * 0.15, hl: mul(u, s * 0.8) });
+        }
+        if (ease > 0.08) {
+          for (const f2 of [0.2, 0.36]) {
+            const top2 = add(add(armpitAt, mul(n, sd * cw * f2)), mul(u, torso * 0.12));
+            const bot = add(hemC, mul(n, sd * hw * (f2 + 0.04)));
+            folds.push({ pts: [top2, add(lerpV(top2, bot, 0.5), mul(n, sd * s * 0.8)), bot], ...soft, a: Math.min(0.28, 0.06 + ease * 0.5), hl: mul(n, sd * s * 0.9) });
+          }
+        }
+      }
+      if (hemDepth > 1.02) {
+        for (const k of [1, 2]) {
+          const c = sub(hemC, mul(u, k * 2.6 * s));
+          folds.push({ pts: across(c, n, hw, -0.4, 0.4, 0.02), ...soft, a: 0.1 + Math.min(0.12, (hemDepth - 1) * 0.5), hl: mul(u, s * 0.8) });
+        }
+      }
+      paintTexture(ctx, tex.texture, pairs, folds);
       if (plain.length) fillShape(ctx, plain, tex.avgColor, sub(M, mul(n, g.shoulder * s)), add(M, mul(n, g.shoulder * s)));
     }
 
