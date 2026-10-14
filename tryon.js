@@ -101,15 +101,115 @@ $('#tryon-color').addEventListener('input', (e) => setColor(e.target.value));
 $('#live-color').addEventListener('input', (e) => setColor(e.target.value));
 
 // ---------- 사진 모드 ----------
+// ---------- 내 사진 분석: 피부·얼굴·머리 자리와 조명 색 ----------
+// 사진 속 원래 옷 위치(지우기용), 손·얼굴·머리(옷 위로 다시 올리기용), 조명 색(옷 사진 색 맞추기용)
+// 사진은 메모리에만 있고 저장·전송하지 않는다
+async function segmentScene(canvas) {
+  const seg = await getClothesSegmenter(); // garmentsource.js
+  const r = seg.segment(canvas);
+  const m = r.categoryMask;
+  const cat = Uint8Array.from(m.getAsUint8Array());
+  const w = m.width, h = m.height;
+  r.close?.();
+  const W = canvas.width, H = canvas.height;
+  const src = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H);
+  const layer = (keep) => {
+    const out = new ImageData(W, H);
+    for (let y = 0; y < H; y++) {
+      const row = Math.floor((y * h) / H) * w;
+      for (let x = 0; x < W; x++) {
+        if (!keep(cat[row + Math.floor((x * w) / W)])) continue;
+        const i = (y * W + x) * 4;
+        out.data[i] = src.data[i]; out.data[i + 1] = src.data[i + 1]; out.data[i + 2] = src.data[i + 2]; out.data[i + 3] = 255;
+      }
+    }
+    const raw = document.createElement('canvas');
+    raw.width = W; raw.height = H;
+    raw.getContext('2d').putImageData(out, 0, 0);
+    if (!('filter' in CanvasRenderingContext2D.prototype)) return raw;
+    const soft = document.createElement('canvas'); // 가장자리를 살짝 흐려 오려 붙인 티가 덜 나게
+    soft.width = W; soft.height = H;
+    const sg = soft.getContext('2d');
+    sg.filter = 'blur(0.8px)';
+    sg.drawImage(raw, 0, 0);
+    return soft;
+  };
+  // 피부 평균색(손·팔·얼굴): 원래 옷이 살짝 삐져나온 곳을 덮을 때 쓴다
+  let sr = 0, sgc = 0, sbc = 0, sn = 0;
+  for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) {
+    const c = cat[Math.floor((y * h) / H) * w + Math.floor((x * w) / W)];
+    if (c !== 2 && c !== 3) continue;
+    const i = (y * W + x) * 4;
+    sr += src.data[i]; sgc += src.data[i + 1]; sbc += src.data[i + 2]; sn++;
+  }
+  return {
+    cat, w, h,
+    skinColor: sn > 50 ? [sr / sn, sgc / sn, sbc / sn] : null,
+    head: layer((c) => c === 1 || c === 3), // 머리카락·얼굴
+    skin: layer((c) => c === 2),            // 몸 피부(손·팔)
+    illum: estimateIllum(src.data, W, H, (x, y) => cat[Math.floor((y * h) / H) * w + Math.floor((x * w) / W)] === 0),
+  };
+}
+
+// 조명 색 추정: 배경에서 가장 밝은 5% 픽셀의 평균(흰 벽·흰 배경이 조명 색을 띤다고 본다)
+function estimateIllum(d, W, H, isBg) {
+  const lum = [];
+  for (let y = 0; y < H; y += 3) {
+    for (let x = 0; x < W; x += 3) {
+      if (!isBg(x, y)) continue;
+      const i = (y * W + x) * 4;
+      lum.push([0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2], d[i], d[i + 1], d[i + 2]]);
+    }
+  }
+  if (lum.length < 50) return null;
+  lum.sort((a, b) => b[0] - a[0]);
+  const top = lum.slice(0, Math.max(10, Math.floor(lum.length * 0.05)));
+  const avg = [1, 2, 3].map((k) => top.reduce((sum, p) => sum + p[k], 0) / top.length);
+  return { rgb: avg, Y: 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2] };
+}
+
+// 옷 사진의 조명 색·밝기를 내 사진 조명에 맞춘다(사진마다 한 번 계산해 둔다)
+function harmonizedTexture(g, scene) {
+  if (!g.illum || !scene?.illum) return g.texture;
+  if (g._harm?.scene === scene) return g._harm.canvas;
+  const gains = scene.illum.rgb.map((v, k) => v / Math.max(1, g.illum.rgb[k]));
+  const mean = (gains[0] + gains[1] + gains[2]) / 3;
+  // 색 차이는 다 맞추되, 밝기는 절반만(검은 옷이 회색이 되지 않게) 0.75~1.25배 안에서
+  const expo = Math.min(1.25, Math.max(0.75, Math.sqrt(scene.illum.Y / Math.max(1, g.illum.Y))));
+  const k = gains.map((v) => (v / mean) * expo);
+  const W = g.texture.width, H = g.texture.height;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const cg = c.getContext('2d', { willReadFrequently: true });
+  cg.drawImage(g.texture, 0, 0);
+  const img = cg.getImageData(0, 0, W, H);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (!d[i + 3]) continue;
+    d[i] = Math.min(255, d[i] * k[0]); d[i + 1] = Math.min(255, d[i + 1] * k[1]); d[i + 2] = Math.min(255, d[i + 2] * k[2]);
+  }
+  cg.putImageData(img, 0, 0);
+  g._harm = { scene, canvas: c };
+  return c;
+}
+
 function renderTryonPhoto() {
-  const { canvas, pose, pxPerCm } = tryon.photo;
+  const { canvas, pose, pxPerCm, scene } = tryon.photo;
+  if (!scene && !tryon.photo.sceneLoading) {
+    // 체형 탭에서 가져온 사진 등 아직 분석 안 된 사진: 분석이 끝나면 다시 그린다
+    tryon.photo.sceneLoading = true;
+    const target = tryon.photo;
+    segmentScene(canvas).then((sc) => { target.scene = sc; if (tryon.photo === target) renderTryonPhoto(); }).catch((err) => console.error(err));
+  }
   const c = document.createElement('canvas');
   c.width = canvas.width;
   c.height = canvas.height;
   c.className = 'analysis-canvas';
   const ctx = c.getContext('2d');
   ctx.drawImage(canvas, 0, 0);
-  const res = GarmentRender.draw(ctx, garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm }));
+  const opts = garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm, scene: scene || null });
+  if (opts.texture && scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, scene) };
+  const res = GarmentRender.draw(ctx, opts);
   $('#tryon-view').replaceChildren(c);
   $('#tryon-notes').innerHTML = res.notes.map((n) => `<li>${esc(n)}</li>`).join('');
   tryonStatus('');
@@ -139,7 +239,9 @@ $('#tryon-photo').addEventListener('change', async (e) => {
       const sw = Math.hypot((det.pose[11].x - det.pose[12].x) * canvas.width, (det.pose[11].y - det.pose[12].y) * canvas.height);
       pxPerCm = sw / shoulderJointCm();
     }
-    tryon.photo = { canvas, pose: det.pose, pxPerCm };
+    tryonStatus('사진 속 손·얼굴·옷 위치 분석 중…');
+    const scene = await segmentScene(canvas).catch((err) => { console.error(err); return null; });
+    tryon.photo = { canvas, pose: det.pose, pxPerCm, scene };
     tryon.photoUploaded = true;
     renderTryonPhoto();
   } catch (err) {

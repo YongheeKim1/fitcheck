@@ -109,6 +109,7 @@
   //   2) 사진 속 명암(원래 입은 옷의 주름·그림자)을 새 옷 색에 겹쳐 입힌다(overlay)
   //   3) 옷 아래 부드러운 그림자로 몸 위에 얹힌 느낌
   let photo = null; // draw()가 옷을 그리기 전에 찍어 둔 화면(사진 또는 카메라 프레임)
+  let noMarks = false; // 옷 사진 입히기 모드에서는 끼는 곳 표시선을 생략
   const canMakeCanvas = typeof document !== 'undefined';
   const bufs = {};
   function buf(name, w, h) {
@@ -266,6 +267,8 @@
   function drawTri(g, img, s, d) {
     const m = affine(s[0], s[1], s[2], d[0], d[1], d[2]);
     if (!m) return;
+    // 원본 삼각형이 거의 납작하면 한 줄의 픽셀이 넓게 펴져 줄무늬가 된다 → 그리지 않는다
+    if (Math.max(Math.hypot(m[0], m[1]), Math.hypot(m[2], m[3])) > 12) return;
     // 조각 사이 틈(가는 선)이 보이지 않게 목표 삼각형을 무게중심에서 2px 키워서 자른다
     const cx = (d[0].x + d[1].x + d[2].x) / 3, cy = (d[0].y + d[1].y + d[2].y) / 3;
     g.save();
@@ -315,7 +318,88 @@
     L.clearRect(0, 0, W, H);
     L.imageSmoothingEnabled = true;
     L.imageSmoothingQuality = 'high';
-    for (const { src, dst } of pairs) drawRibbon(L, img, src, dst);
+    for (const { src, dst, fade } of pairs) {
+      if (!fade) { drawRibbon(L, img, src, dst); continue; }
+      // 이어 붙이는 조각: 따로 그린 뒤 from(불투명) → to(투명)로 서서히 사라지게 해서 얹는다
+      const pc = buf('piece', W, H);
+      const pg = pc.getContext('2d');
+      pg.setTransform(1, 0, 0, 1, 0, 0);
+      pg.globalCompositeOperation = 'source-over';
+      pg.clearRect(0, 0, W, H);
+      pg.imageSmoothingEnabled = true;
+      pg.imageSmoothingQuality = 'high';
+      drawRibbon(pg, img, src, dst);
+      const gr = pg.createLinearGradient(fade.from.x, fade.from.y, fade.to.x, fade.to.y);
+      gr.addColorStop(0, 'rgba(0,0,0,1)');
+      gr.addColorStop(1, 'rgba(0,0,0,0)');
+      pg.globalCompositeOperation = 'destination-in';
+      pg.fillStyle = gr;
+      pg.fillRect(0, 0, W, H);
+      pg.globalCompositeOperation = 'source-over';
+      L.drawImage(pc, 0, 0);
+    }
+    // 조각 사이·두 다리 사이에 생긴 작은 빈틈은 주변 천 색으로 메운다(목표 모양 안에서만)
+    if (pairs.some((p) => p.fill)) {
+      const blurred = (k) => {
+        const w = Math.max(1, Math.round(W / k)), h = Math.max(1, Math.round(H / k));
+        const c = buf('gap' + k, w, h);
+        const cg = c.getContext('2d');
+        cg.clearRect(0, 0, w, h);
+        cg.imageSmoothingEnabled = true;
+        cg.imageSmoothingQuality = 'high';
+        cg.drawImage(layer, 0, 0, w, h);
+        return c;
+      };
+      const gf = buf('gapfill', W, H);
+      const gg = gf.getContext('2d');
+      gg.setTransform(1, 0, 0, 1, 0, 0);
+      gg.globalCompositeOperation = 'source-over';
+      gg.clearRect(0, 0, W, H);
+      gg.save();
+      gg.beginPath();
+      for (const { dst, fill } of pairs) {
+        if (!fill) continue;
+        const rows = dst.slice(typeof fill === 'number' ? fill : 0).map(byX);
+        rows.forEach((r, i) => (i ? gg.lineTo(r[0].x, r[0].y) : gg.moveTo(r[0].x, r[0].y)));
+        for (let i = rows.length - 1; i >= 0; i--) gg.lineTo(rows[i][1].x, rows[i][1].y);
+        gg.closePath();
+      }
+      gg.clip('nonzero');
+      gg.imageSmoothingEnabled = true;
+      gg.imageSmoothingQuality = 'high';
+      for (const k of [32, 12]) { const b = blurred(k); for (let r = 0; r < 3; r++) gg.drawImage(b, 0, 0, W, H); }
+      gg.restore();
+      L.save();
+      L.globalCompositeOperation = 'destination-over';
+      L.drawImage(gf, 0, 0);
+      L.restore();
+    }
+    // 둥근 몸에 감긴 느낌: 옷 가장자리로 갈수록 살짝 어둡게(외곽을 크게 흐린 알파의 반대값)
+    const k = 24;
+    const sw = Math.max(1, Math.round(W / k)), shh = Math.max(1, Math.round(H / k));
+    const sm = buf('edgeSmall', sw, shh);
+    const smg = sm.getContext('2d');
+    smg.clearRect(0, 0, sw, shh);
+    smg.imageSmoothingEnabled = true;
+    smg.drawImage(layer, 0, 0, sw, shh);
+    const ed = buf('edge', W, H);
+    const eg = ed.getContext('2d');
+    eg.globalCompositeOperation = 'source-over';
+    eg.clearRect(0, 0, W, H);
+    eg.fillStyle = '#000';
+    eg.fillRect(0, 0, W, H);
+    eg.globalCompositeOperation = 'destination-out';
+    eg.imageSmoothingEnabled = true;
+    eg.imageSmoothingQuality = 'high';
+    eg.drawImage(sm, 0, 0, W, H);
+    eg.globalCompositeOperation = 'destination-in';
+    eg.drawImage(layer, 0, 0);
+    eg.globalCompositeOperation = 'source-over';
+    L.save();
+    L.globalCompositeOperation = 'source-atop';
+    L.globalAlpha = 0.45;
+    L.drawImage(ed, 0, 0);
+    L.restore();
     // 내 사진의 주름·그림자를 옷 모양 안에만 약하게
     const sh = buf('shade2', W, H);
     const S = sh.getContext('2d');
@@ -360,8 +444,229 @@
     ctx.restore();
   }
 
+  // ---------- 사진과 자연스럽게 합치기(사진 모드) ----------
+  // 사진 속 몸이 있는 자리(원래 옷을 지울 때 남길 곳)와 손·팔뚝 자리(옷 위로 다시 올릴 곳)
+  function bodyGeo(P, s, body) {
+    const shA = P(11), shB = P(12), hA = P(23), hB = P(24);
+    const M = mid(shA, shB), Hm = mid(hA, hB);
+    const u = norm(sub(Hm, M)), n = norm(sub(shB, shA));
+    const torso = len(sub(Hm, M));
+    const at = (t) => add(M, mul(u, torso * t));
+    const half = (circ, kind) => (visW(circ, kind) * s) / 2;
+    const rows = [[at(0), (body.shoulder * s) / 2], [at(0.28), half(body.chest, 'chest')], [at(0.62), half(body.waist, 'waist')], [Hm, half(body.hip, 'hip')]];
+    const torsoPoly = [...rows.map(([c, w]) => sub(c, mul(n, w))), ...rows.slice().reverse().map(([c, w]) => add(c, mul(n, w)))];
+    const segs = [];
+    const thighR = half(body.thigh, 'leg');
+    for (const [h, k, a, heel] of [[23, 25, 27, 29], [24, 26, 28, 30]]) {
+      segs.push({ a: P(h), b: P(k), r: thighR }, { a: P(k), b: P(a), r: thighR * 0.7 }, { a: P(a), b: P(heel), r: 5 * s });
+    }
+    const hands = [];
+    const arms = [];
+    for (const [sh, el, wr, fi] of [[11, 13, 15, 19], [12, 14, 16, 20]]) {
+      const armSegs = [{ a: P(sh), b: P(el), r: 5.5 * s }, { a: P(el), b: P(wr), r: 4.5 * s }, { a: P(wr), b: P(fi), r: 5 * s }];
+      segs.push(...armSegs);
+      // 피부로 덮어도 되는 곳: 위팔의 아래쪽(어깨에서 45% 아래부터 팔꿈치까지) — 소매 끝이 오는 자리
+      arms.push({ a: lerpV(P(sh), P(el), 0.45), b: P(el), r: 5 * s });
+      hands.push({ a: P(el), b: P(wr), r: 4.8 * s }, { a: P(wr), b: P(fi), r: 5.5 * s });
+    }
+    segs.push({ a: M, b: sub(M, mul(u, 12 * s)), r: 6 * s }); // 목
+    return { torsoPoly, segs, hands, arms, s };
+  }
+
+  function strokeSegs(g, segs) {
+    g.lineCap = 'round';
+    for (const { a, b, r } of segs) {
+      g.lineWidth = r * 2;
+      g.beginPath();
+      g.moveTo(a.x, a.y);
+      g.lineTo(b.x, b.y);
+      g.stroke();
+    }
+  }
+
+  // 구멍 메우기(push-pull): 구멍 밖 픽셀을 점점 거칠게 평균 낸 피라미드로 구멍을 주변 색으로 채운다.
+  // 벽·바닥 같은 배경을 이어 붙이는 데 충분하고 빠르다
+  function inpaint(img, W, hole, box) {
+    const x0 = box.x0, y0 = box.y0, bw = box.x1 - box.x0 + 1, bh = box.y1 - box.y0 + 1;
+    const d = img.data;
+    let lv = { w: bw, h: bh, c: new Float32Array(bw * bh * 3), a: new Float32Array(bw * bh) };
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        const j = y * bw + x;
+        if (hole(x + x0, y + y0)) continue;
+        const i = ((y + y0) * W + (x + x0)) * 4;
+        lv.c[j * 3] = d[i]; lv.c[j * 3 + 1] = d[i + 1]; lv.c[j * 3 + 2] = d[i + 2];
+        lv.a[j] = 1;
+      }
+    }
+    const levels = [lv];
+    while (lv.w > 1 || lv.h > 1) {
+      const w = Math.ceil(lv.w / 2), h = Math.ceil(lv.h / 2);
+      const nx = { w, h, c: new Float32Array(w * h * 3), a: new Float32Array(w * h) };
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          let r = 0, g = 0, b = 0, s = 0;
+          for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+            const X = x * 2 + dx, Y = y * 2 + dy;
+            if (X >= lv.w || Y >= lv.h) continue;
+            const k = Y * lv.w + X, wt = lv.a[k];
+            r += lv.c[k * 3] * wt; g += lv.c[k * 3 + 1] * wt; b += lv.c[k * 3 + 2] * wt; s += wt;
+          }
+          const j = y * w + x;
+          if (s > 0) { nx.c[j * 3] = r / s; nx.c[j * 3 + 1] = g / s; nx.c[j * 3 + 2] = b / s; }
+          nx.a[j] = Math.min(1, s);
+        }
+      }
+      levels.push(nx);
+      lv = nx;
+    }
+    // 위(거친 단계)에서 아래로: 비어 있는 만큼 윗단계 색(쌍선형 보간)으로 채운다
+    for (let L = levels.length - 2; L >= 0; L--) {
+      const f = levels[L], c = levels[L + 1];
+      for (let y = 0; y < f.h; y++) {
+        for (let x = 0; x < f.w; x++) {
+          const j = y * f.w + x;
+          const wt = f.a[j];
+          if (wt >= 1) continue;
+          const px = Math.min(c.w - 1, Math.max(0, (x + 0.5) / 2 - 0.5)), py = Math.min(c.h - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
+          const xa = Math.floor(px), ya = Math.floor(py), xb = Math.min(c.w - 1, xa + 1), yb = Math.min(c.h - 1, ya + 1);
+          const fx = px - xa, fy = py - ya;
+          for (let ch = 0; ch < 3; ch++) {
+            const v = (c.c[(ya * c.w + xa) * 3 + ch] * (1 - fx) + c.c[(ya * c.w + xb) * 3 + ch] * fx) * (1 - fy)
+              + (c.c[(yb * c.w + xa) * 3 + ch] * (1 - fx) + c.c[(yb * c.w + xb) * 3 + ch] * fx) * fy;
+            f.c[j * 3 + ch] = f.c[j * 3 + ch] * wt + v * (1 - wt);
+          }
+          f.a[j] = 1;
+        }
+      }
+    }
+    const top = levels[0];
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        if (!hole(x + x0, y + y0)) continue;
+        const j = y * bw + x, i = ((y + y0) * W + (x + x0)) * 4;
+        d[i] = top.c[j * 3]; d[i + 1] = top.c[j * 3 + 1]; d[i + 2] = top.c[j * 3 + 2];
+      }
+    }
+  }
+
+  // G: 옷만 그린 투명 캔버스. scene: 내 사진 분석 결과 { cat, w, h, head, skin } (tryon.js)
+  // 1) 새 옷 밖으로 삐져나온 원래 옷(몸이 없는 자리)을 배경으로 메운다
+  // 2) 옷을 얹는다
+  // 3) 손·팔뚝(소매 안 제외)과 얼굴·머리를 옷 위로 다시 올린다
+  function composeScene(ctx, G, scene, geo) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const gA = G.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+    const bodyC = buf('bodymask', W, H);
+    const bg = bodyC.getContext('2d', { willReadFrequently: true });
+    bg.clearRect(0, 0, W, H);
+    bg.fillStyle = '#fff';
+    bg.strokeStyle = '#fff';
+    bg.beginPath();
+    geo.torsoPoly.forEach((p, i) => (i ? bg.lineTo(p.x, p.y) : bg.moveTo(p.x, p.y)));
+    bg.closePath();
+    bg.fill();
+    strokeSegs(bg, geo.segs);
+    const bA = bg.getImageData(0, 0, W, H).data;
+    const sx = scene.w / W, sy = scene.h / H;
+    const [z0, z1] = geo.zone;
+    const catAt = (x, y) => scene.cat[Math.floor(y * sy) * scene.w + Math.floor(x * sx)];
+    // 바지: 새 바지 밑단 아래(발목까지)는 분할이 배경으로 잘못 본 원래 바지도 색으로 찾아낸다
+    let gBottom = null, origC = null, src = null;
+    if (geo.ankles) {
+      gBottom = new Int32Array(W).fill(-1);
+      for (let x = 0; x < W; x++) for (let y = H - 1; y >= 0; y--) if (gA[(y * W + x) * 4 + 3] > 25) { gBottom[x] = y; break; }
+      src = ctx.getImageData(0, 0, W, H).data;
+      let r = 0, g2 = 0, b = 0, n = 0;
+      for (let y = Math.floor((z0 + H) / 2); y < H; y += 2) for (let x = 0; x < W; x += 2) {
+        const i = (y * W + x) * 4;
+        if (gA[i + 3] > 25 && bA[i + 3] > 100 && catAt(x, y) === 4) { r += src[i]; g2 += src[i + 1]; b += src[i + 2]; n++; }
+      }
+      if (n > 50) origC = [r / n, g2 / n, b / n];
+    }
+    const isOrig = (x, y) => {
+      if (catAt(x, y) === 4) return true;
+      if (!origC || gBottom[x] < 0 || y <= gBottom[x] || y > geo.ankles.yMax) return false;
+      const i = (y * W + x) * 4;
+      return Math.hypot(src[i] - origC[0], src[i + 1] - origC[1], src[i + 2] - origC[2]) < 70;
+    };
+    const hole = (x, y) => {
+      if (y < z0 || y > z1) return false;
+      const k = (y * W + x) * 4 + 3;
+      if (gA[k] > 25 || bA[k] > 100) return false;
+      return isOrig(x, y); // 원래 옷
+    };
+    let box = null;
+    for (let y = Math.max(0, Math.floor(z0)); y < Math.min(H, Math.ceil(z1)); y += 2) {
+      for (let x = 0; x < W; x += 2) {
+        if (!hole(x, y)) continue;
+        if (!box) box = { x0: x, y0: y, x1: x, y1: y };
+        else { box.x0 = Math.min(box.x0, x); box.y0 = Math.min(box.y0, y); box.x1 = Math.max(box.x1, x); box.y1 = Math.max(box.y1, y); }
+      }
+    }
+    // 새 바지가 원래 바지보다 짧으면 밑단 아래로 원래 바지가 보인다 → 발목 살색으로(원래 바지의 명암은 살린다)
+    if (geo.ankles && scene.skinColor) {
+      const img = ctx.getImageData(0, 0, W, H);
+      const d = img.data;
+      const ank = [];
+      let lum = 0;
+      for (let x = 0; x < W; x++) {
+        if (gBottom[x] < 0) continue;
+        for (let y = gBottom[x] + 1; y < H; y++) {
+          const i = y * W + x;
+          if (bA[i * 4 + 3] <= 100 || y > geo.ankles.yMax || !isOrig(x, y)) continue;
+          ank.push(i);
+          lum += d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2];
+        }
+      }
+      if (ank.length) {
+        lum /= ank.length;
+        const [r, g2, b] = scene.skinColor;
+        for (const i of ank) {
+          const f = Math.min(1.12, Math.max(0.7, (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / (lum || 1)));
+          d[i * 4] = r * f; d[i * 4 + 1] = g2 * f; d[i * 4 + 2] = b * f;
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+    }
+    if (box) {
+      const pad = Math.round(W / 30);
+      box = { x0: Math.max(0, box.x0 - pad), y0: Math.max(0, box.y0 - pad), x1: Math.min(W - 1, box.x1 + pad), y1: Math.min(H - 1, box.y1 + pad) };
+      const img = ctx.getImageData(0, 0, W, H);
+      // 새 옷 아래에 깔린 원래 옷 픽셀도 채움 재료에서 뺀다(안 그러면 지운 자리가 원래 옷 색으로 다시 채워진다)
+      const under = (x, y) => gA[(y * W + x) * 4 + 3] > 25 && scene.cat[Math.floor(y * sy) * scene.w + Math.floor(x * sx)] === 4;
+      inpaint(img, W, (x, y) => hole(x, y) || under(x, y), box);
+      ctx.putImageData(img, 0, 0);
+    }
+    ctx.drawImage(G, 0, 0);
+
+    // 손·팔뚝: 소매 안은 빼고 옷 위로
+    const front = buf('front', W, H);
+    const fg = front.getContext('2d');
+    fg.globalCompositeOperation = 'source-over';
+    fg.clearRect(0, 0, W, H);
+    fg.strokeStyle = '#fff';
+    strokeSegs(fg, geo.hands);
+    if (geo.noSkin.length) {
+      fg.globalCompositeOperation = 'destination-out';
+      fg.fillStyle = '#fff';
+      for (const pts of geo.noSkin) {
+        fg.beginPath();
+        pts.forEach((p, i) => (i ? fg.lineTo(p.x, p.y) : fg.moveTo(p.x, p.y)));
+        fg.closePath();
+        fg.fill();
+      }
+    }
+    fg.globalCompositeOperation = 'source-in';
+    fg.drawImage(scene.skin, 0, 0, W, H);
+    fg.globalCompositeOperation = 'source-over';
+    ctx.drawImage(front, 0, 0);
+    ctx.drawImage(scene.head, 0, 0, W, H);
+  }
+
   // 끼는 곳: 빨간 점선
   function markTight(ctx, a, b, lw) {
+    if (noMarks) return; // 옷 사진으로 입힌 실사 모드: 그림을 해치지 않게 문장으로만 안내
     ctx.save();
     ctx.strokeStyle = '#ef4444';
     ctx.lineWidth = lw * 2;
@@ -443,19 +748,34 @@
     const tex = o.texture && o.texture.category === 'bottom' ? o.texture : null;
     if (tex) {
       // 허리 띠: 허리 밴드 위(T) → 엉덩이(Hl) → 가랑이(C) 7칸 + 다리 두 개(garmentsource.js의 원본 띠와 같은 구성)
-      const sidePoly = (leg, sd) => [add(T, mul(n, (sd * wW) / 2)), add(Hl, mul(n, (sd * hW) / 2)), leg.outer[0]];
+      // 원본 허리 띠가 가랑이 아래 두 칸(9줄)까지 있으면 목표도 같이 늘리고, 다리 위에 겹친 부분은 서서히 투명하게 섞는다
+      const sidePoly = (leg, sd) => [add(T, mul(n, (sd * wW) / 2)), add(Hl, mul(n, (sd * hW) / 2)), ...leg.outer];
+      const rows = tex.ribbons.waist.length >= 9 ? 8 : 6;
       const dst = [];
       const dC = dot(sub(C, T), u);
-      for (let k = 0; k <= 6; k++) {
-        const D = dC * (k / 6);
+      // 상품 사진에서 상의가 허리를 덮어 바지 윗부분이 조금만 보이면, 그 조금을 밑위 전체로 늘리지 않고
+      // 실제 크기(다리 길이로 잰 상품 사진 배율)대로 가랑이 쪽에만 붙인다. 덮인 위쪽은 내 사진의 상의가 그대로 보인다
+      const w0 = tex.ribbons.waist[0], w6 = tex.ribbons.waist[6];
+      const srcLegs = (tex.ribbons.legs || []).filter(Boolean).map((l) => l.lengthPx).filter((v) => v > 0);
+      let D0 = 0;
+      if (w0 && w6 && srcLegs.length && g.length > g.rise) {
+        const srcPerCm = Math.max(...srcLegs) / (g.length - g.rise);
+        const visCm = (w6[0].y - w0[0].y) / srcPerCm;
+        if (visCm < g.rise * 0.8) D0 = Math.max(0, dC - Math.min(dC, visCm * 1.1 * s));
+      }
+      for (let k = 0; k <= rows; k++) {
+        const D = D0 + (dC - D0) * (k / 6);
         dst.push([atDepth(sidePoly(neg, -1), T, u, D), atDepth(sidePoly(pos, 1), T, u, D)]);
       }
-      const pairs = [{ src: tex.ribbons.waist, dst }];
+      const pairs = [];
       const targets = legs.slice().sort((a, b) => a.start.x - b.start.x);
       targets.forEach((leg, i) => {
         const srcLeg = tex.ribbons.legs?.[i];
-        if (srcLeg) pairs.push({ src: srcLeg.ribbon, dst: leg.outer.map((p, j) => [p, leg.inner[j]]) });
+        if (srcLeg) pairs.push({ src: srcLeg.ribbon, dst: leg.outer.map((p, j) => [p, leg.inner[j]]), fill: true });
       });
+      const ext = ((dC - D0) * 2) / 6; // 가랑이 아래로 겹치는 길이
+      const fade = rows > 6 ? { from: sub(C, mul(u, ext * 0.15)), to: add(C, mul(u, ext * 0.95)) } : null;
+      pairs.push({ src: tex.ribbons.waist.slice(0, rows + 1), dst, fade, fill: true });
       paintTexture(ctx, tex.texture, pairs);
     } else {
       fillShape(ctx, [poly], color, sub(Hl, mul(n, hW / 2)), add(Hl, mul(n, hW / 2)));
@@ -533,7 +853,10 @@
 
     if (body.estimated.length) notes.push('몸 치수 일부를 관절 간격으로 추정했어요. 내 체형에 치수를 넣으면 더 정확해요.');
     if (guessed.length) notes.push(`사이즈표에 ${guessed.join('·')} 실측이 없어서 다른 치수로 추정해 그렸어요.`);
-    return { ok: true, notes };
+    // 밑단 아래 원래 바지를 지울 수 있는 가장 낮은 줄: 발목과 발꿈치 사이(그 아래는 신발)
+    const ankY = Math.max(P(27).y, P(28).y);
+    const ankleMax = ankY + 0.5 * Math.max(0, Math.max(P(29).y, P(30).y, P(31).y, P(32).y) - ankY);
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax } } };
   }
 
   // ---------------- 상의 ----------------
@@ -668,14 +991,23 @@
         const D = d0 + (d1 - d0) * (k / 10);
         dst.push([atDepth(sidePoly(-1), HPS, u, D), atDepth(sidePoly(1), HPS, u, D)]);
       }
-      const pairs = [{ src: tex.ribbons.torso, dst }];
+      const pairs = [{ src: tex.ribbons.torso, dst, fill: 4 }]; // 목둘레(위 4줄)는 비워 둔다
       // 소매: 화면 왼쪽 소매끼리, 오른쪽 소매끼리 짝짓기
       const srcSleeves = tex.ribbons.sleeves || [];
       const targets = sleeveTargets.slice().sort((a, b) => a.startX - b.startX);
       const plain = [];
+      // 상품 사진 배율(가슴 단면 폭으로 잰 px/cm): 사진 속 소매가 실측보다 길면(팔을 굽혔거나 소매 끝을 잘못 잡았을 때)
+      // 실측 길이만큼만 잘라 쓴다. 전부 쓰면 긴 소매가 짧은 소매 안에 눌려 가로 줄무늬가 된다
+      const chestRow = tex.ribbons.torso[4];
+      const srcPerCm = chestRow ? (chestRow[1].x - chestRow[0].x) / g.chest : 0;
       targets.forEach((t, i) => {
         const srcS = srcSleeves[i];
-        if (srcS) pairs.push({ src: srcS.ribbon, dst: t.rib });
+        if (srcS) {
+          const want = g.sleeve * srcPerCm;
+          const f = srcPerCm > 0 && srcS.lengthPx > want * 1.1 ? want / srcS.lengthPx : 1;
+          const rib = f < 1 ? resample(srcS.ribbon, 41).slice(0, Math.max(3, Math.round(40 * f) + 1)) : srcS.ribbon;
+          pairs.push({ src: rib, dst: t.rib, fill: true });
+        }
         else plain.push(t.poly); // 원본에 소매가 안 보이면 옷 평균색으로
       });
       paintTexture(ctx, tex.texture, pairs);
@@ -711,7 +1043,8 @@
     notes.push(hemVsHip >= 0 ? `밑단이 골반선보다 약 ${cmText(hemVsHip)} 아래로 내려와요.` : `밑단이 골반선보다 약 ${cmText(hemVsHip)} 위에 와요(짧은 기장).`);
     if (body.estimated.length) notes.push('몸 치수 일부를 관절 간격으로 추정했어요. 내 체형에 치수를 넣으면 더 정확해요.');
     if (guessed.length) notes.push(`사이즈표에 ${guessed.join('·')} 실측이 없어서 다른 치수로 추정해 그렸어요.`);
-    return { ok: true, notes };
+    const zoneTop = Math.min(HPS.y, seam(-1).y, seam(1).y) - 3 * s;
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: sleeves, zone: [zoneTop, Math.max(hemC.y, hipMid.y) + 4 * s] } };
   }
 
   function draw(ctx, opts) {
@@ -723,9 +1056,19 @@
       pg.clearRect(0, 0, photo.width, photo.height);
       pg.drawImage(ctx.canvas, 0, 0);
     }
-    return opts.category === 'top' ? drawTop(ctx, opts) : drawBottom(ctx, opts);
+    const drawFn = opts.category === 'top' ? drawTop : drawBottom;
+    noMarks = !!(opts.texture && opts.texture.category === opts.category);
+    if (!(opts.scene && photo)) return drawFn(ctx, opts);
+    // 사진 모드: 옷을 투명 캔버스에 따로 그린 뒤 사진과 합친다(원래 옷 정리, 손·얼굴 앞으로)
+    const G = buf('garment', ctx.canvas.width, ctx.canvas.height);
+    const gg = G.getContext('2d');
+    gg.setTransform(1, 0, 0, 1, 0, 0);
+    gg.clearRect(0, 0, G.width, G.height);
+    const res = drawFn(gg, opts);
+    if (res.ok) composeScene(ctx, G, opts.scene, res.geo);
+    return res;
   }
 
-  root.GarmentRender = { draw, visW, walk };
+  root.GarmentRender = { draw, visW, walk, inpaint };
   if (typeof module !== 'undefined') module.exports = root.GarmentRender;
 })(typeof window !== 'undefined' ? window : globalThis);
