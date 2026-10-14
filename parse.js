@@ -16,7 +16,7 @@
   // 허벅치·밑의·종장 등은 OCR이 자주 잘못 읽는 형태
   const COLUMNS = [
     { key: null, re: re('뒷밑위', '뒤밑위', '인심', '안기장', '안쪽기장', '무릎', '종아리', 'inseam', 'knee',
-      '소매통', '소매단', '소매폭', '소매둘레', '암홀', '진동', '화장', '팔통', '목너비', '넥') },
+      '소매부리', '소매통', '소매단', '소매폭', '커프스', '소매둘레', '암홀', '진동', '화장', '팔통', '목너비', '넥') },
     { key: 'size', re: re('사이즈', '호칭', '치수', 'size') },
     { key: 'waist', re: re('허리', 'waist') },
     { key: 'hip', re: re('엉덩이', '힙', 'hip') },
@@ -88,6 +88,10 @@
     return line.split(/[\t|│_]+|\s+/).map((t) => t.trim()).filter(Boolean);
   }
 
+  // 빈 칸 표시(무신사는 값이 없는 칸을 '-'로 보여 준다): 칸 위치는 유지하고 값은 비운다
+  const isBlankCell = (t) => /^[-–—]$/.test(t.trim());
+  const BLANK = NaN;
+
   const isSizeLike = (t) => /^(free|f|xxs|xs|s|m|l|xl|xxl|xxxl|\d?x{1,3}l|\d{1,2})$/i.test(cleanToken(t));
   const isModifier = (t) => /^(단\s*면|둘\s*레|\(?cm\)?|단\s*위|:)$/i.test(t);
 
@@ -104,12 +108,12 @@
       const toks = tokens(line);
       if (!toks.length) continue;
       let label = '';
-      let nums = toks.map(toNumber);
+      let nums = toks.map((t) => (isBlankCell(t) ? BLANK : toNumber(t)));
       if (nums[0] === null) {
         label = cleanToken(toks[0]);
         nums = nums.slice(1);
       }
-      nums = nums.filter((n) => n !== null);
+      nums = nums.filter((n) => n !== null); // 빈 칸(NaN)은 남겨서 열 위치를 지킨다
       if (!label && (hasSizeCol || nums.length > valueCols.length) && nums.length >= 2) {
         label = String(nums.shift());
       }
@@ -123,9 +127,21 @@
       if (nums.length < valueCols.length) shortRows++;
       const row = { size: label };
       valueCols.forEach((c, i) => {
-        if (c.key && nums[i] !== undefined) row[c.key] = nums[i];
+        if (c.key && nums[i] !== undefined && !Number.isNaN(nums[i])) row[c.key] = nums[i];
       });
       rows.push(row);
+    }
+
+    // 사이즈 이름이 표 밖에 따로 나열된 경우(무신사: "1 2 3 4"가 표 위에 세로로):
+    // 헤더 바로 위의 "한 단어짜리 사이즈 줄"들을 행 순서대로 붙인다
+    if (rows.length && rows.every((r) => !r.size)) {
+      const run = [];
+      for (let k = headerIdx - 1; k >= 0; k--) {
+        const t = tokens(lines[k]);
+        if (t.length !== 1 || !isSizeLike(t[0])) break;
+        run.unshift(cleanToken(t[0]));
+      }
+      if (run.length >= rows.length) rows.forEach((r, k) => { r.size = run[k]; });
     }
     return { rows, cols: valueCols, shortRows };
   }
@@ -192,10 +208,62 @@
     return { rows, cols: valueCols, shortRows: 0 };
   }
 
+  const partCount = (l) => findColumns(l).filter((c) => c.key && c.key !== 'size').length;
+
+  // 쇼핑몰 표를 복사하면 헤더와 칸이 여러 줄로 쪼개져 나온다. 가로형(헤더 한 줄 + 행마다 한 줄)으로 다시 묶는다.
+  //   무신사: "1 / 총장<탭>2 / 허리단면<탭>3 / ..." (열 이름과 열 번호가 섞임) + 행 데이터는 한 줄씩
+  //   에이블리: "사이즈 / 총장 / 어깨단면 / ... / FREE / 62 / - / 58 ..." (모든 칸이 한 줄씩)
+  function normalizeLines(lines) {
+    if (lines.some((l) => partCount(l) >= 2)) return lines;
+    const numCount = (l) => tokens(l).filter((t) => toNumber(t) !== null).length;
+    // 쓰지 않는 열(암홀 등)도 헤더 조각이다 — 빠뜨리면 열 개수가 어긋난다
+    const anyCol = (l) => findColumns(l).filter((c) => c.key !== 'size').length;
+    // 헤더 조각: 열 이름 한 단어("사이즈", "어깨단면"), 열 이름 + 열 번호("총장<탭>2"), 단위·수식어,
+    // 그리고 바로 뒤에 열 이름이 오는 열 번호. "어깨 45 47 49" 같은 세로형 데이터 줄은 조각이 아니다
+    const isPiece = (l, next) => {
+      const toks = tokens(l);
+      if (/^\d{1,2}$/.test(l)) return next != null && anyCol(next) >= 1;
+      if (toks.every(isModifier)) return true;
+      if (toks.length === 1 && findColumns(l).length >= 1) return true;
+      return toks.length <= 2 && anyCol(l) >= 1 && numCount(l) <= 1;
+    };
+
+    for (let start = 0; start < lines.length; start++) {
+      if (!isPiece(lines[start], lines[start + 1])) continue;
+      let end = start;
+      while (end < lines.length && isPiece(lines[end], lines[end + 1])) end++;
+      const header = lines.slice(start, end).flatMap(tokens).filter((t) => !/^\d{1,2}$/.test(t)).join('\t');
+      if (partCount(header) < 2) { start = end; continue; }
+
+      // 헤더 뒤가 "칸마다 한 줄"이면 열 개수만큼씩 묶어 행을 만든다
+      const cells = [];
+      let k = end;
+      while (k < lines.length) {
+        const t = tokens(lines[k]);
+        if (t.length !== 1 || findColumns(lines[k]).length) break;
+        if (!(isBlankCell(t[0]) || toNumber(t[0]) !== null || isSizeLike(t[0]))) break;
+        cells.push(t[0]);
+        k++;
+      }
+      const cols = findColumns(header);
+      let width = cols.length;
+      // 헤더에 사이즈 열이 없는데 첫 칸이 글자(FREE, M 등)면 사이즈 칸이 하나 더 있는 것
+      if (!cols.some((c) => c.key === 'size') && cells.length && toNumber(cells[0]) === null && !isBlankCell(cells[0])) width++;
+      const out = [...lines.slice(0, start), header];
+      if (cells.length >= width) {
+        for (let j = 0; j + width <= cells.length; j += width) out.push(cells.slice(j, j + width).join('\t'));
+        out.push(...lines.slice(k));
+      } else {
+        out.push(...lines.slice(end));
+      }
+      return out;
+    }
+    return lines;
+  }
+
   function parseSizeChart(text) {
-    const lines = String(text || '').replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const lines = normalizeLines(String(text || '').replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean));
     const warnings = [];
-    const partCount = (l) => findColumns(l).filter((c) => c.key && c.key !== 'size').length;
 
     let result = null;
     const headerIdx = lines.findIndex((l) => partCount(l) >= 2);

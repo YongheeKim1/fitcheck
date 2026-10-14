@@ -280,3 +280,8 @@ body.locked { overflow: hidden; }
 .auth-box h1 { margin: 0; font-size: 26px; text-align: center; }
 .auth-box > .hint { text-align: center; }
 .auth-box .segment { margin: 16px 0 14px; }
+
+.import-mini { margin: 0 0 12px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; }
+.import-mini summary { cursor: pointer; font-weight: 600; color: var(--primary); }
+.import-mini textarea { width: 100%; margin: 6px 0 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: 13px/1.4 ui-monospace, Consolas, monospace; white-space: pre; overflow-x: auto; }
+.import-mini .size-tabs { margin-bottom: 0; }

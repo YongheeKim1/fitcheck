@@ -220,6 +220,10 @@ function openItemForm(p) {
     $('#p-stretch').value = p.stretch;
     $('#p-feel').value = p.feel;
   }
+  // 사이즈표로 채우기: 새 옷이면 펼쳐 두고, 수정이면 접어 둔다
+  $('#item-import').open = !p;
+  $('#item-size-picks').innerHTML = '';
+  setItemImportStatus('');
   form.classList.remove('hidden');
   form.scrollIntoView({ behavior: 'smooth' });
 }
@@ -250,6 +254,70 @@ $('#item-form').addEventListener('submit', (e) => {
   saveState();
   form.classList.add('hidden');
   renderCloset();
+});
+
+// ---------- 내 옷: 쇼핑몰 사이즈표로 채우기 ----------
+// 산 옷의 상품 페이지 실측표(복사한 글자 또는 캡처)를 읽고, 내가 산 사이즈를 누르면 실측 칸을 채운다
+let itemChartRows = [];
+
+function setItemImportStatus(text, kind = '') {
+  const el = $('#item-import-status');
+  el.className = 'hint import-status ' + kind;
+  el.textContent = text;
+}
+
+function applyItemChart(text) {
+  const { rows, warnings, category } = parseSizeChart(text);
+  if (!rows.length) {
+    setItemImportStatus(warnings.join(' '), 'err');
+    $('#item-size-picks').innerHTML = '';
+    return;
+  }
+  itemChartRows = rows;
+  // 표 종류(상의/바지)에 맞게 입력 칸을 바꾼다
+  if ($('#p-category').value !== category) {
+    $('#p-category').value = category;
+    renderItemMeasures(category, currentMeasureValues());
+  }
+  setItemImportStatus(`${CATEGORY_LABEL[category]} 사이즈표예요. 내가 산 사이즈를 눌러 주세요.${warnings.length ? ' ' + warnings.join(' ') : ''}`, 'ok');
+  $('#item-size-picks').innerHTML = rows.map((r, i) =>
+    `<button type="button" data-item-pick="${i}">${esc(r.size || `#${i + 1}`)}</button>`).join('');
+  if (rows.length === 1) pickItemSize(0); // 사이즈가 하나(FREE 등)면 바로 채운다
+}
+
+function pickItemSize(i) {
+  const row = itemChartRows[i];
+  if (!row) return;
+  const cat = $('#p-category').value;
+  renderItemMeasures(cat, row);
+  if (row.size) $('#p-size').value = row.size;
+  document.querySelectorAll('#item-size-picks button').forEach((b) => b.classList.toggle('active', b.dataset.itemPick === String(i)));
+  const filled = partsOf(cat).filter((pt) => row[pt.key] != null).map((pt) => pt.label).join('·');
+  setItemImportStatus(`${row.size || '선택한'} 사이즈 실측(${filled})을 채웠어요. 이름과 입었을 때 느낌을 확인하고 저장하세요.`, 'ok');
+}
+
+$('#item-size-picks').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-item-pick]');
+  if (b) pickItemSize(Number(b.dataset.itemPick));
+});
+
+$('#item-chart-text').addEventListener('paste', () => setTimeout(() => applyItemChart($('#item-chart-text').value), 0));
+$('#item-chart-text').addEventListener('change', () => applyItemChart($('#item-chart-text').value));
+
+$('#item-chart-image').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    setItemImportStatus(ocrWorker ? '글자 인식 중…' : '글자 인식 엔진 불러오는 중… (처음 한 번만)');
+    const worker = await getOcrWorker();
+    const { data } = await worker.recognize(await prepareImage(file));
+    $('#item-chart-text').value = data.text.replace(/[ \t]{2,}/g, '  ').replace(/\n{2,}/g, '\n').trim();
+    applyItemChart(data.text);
+  } catch (err) {
+    console.error(err);
+    setItemImportStatus(navigator.onLine ? '이미지를 읽지 못했어요. 다시 시도해 주세요.' : '처음 이미지 인식에는 인터넷 연결이 필요해요.', 'err');
+  }
 });
 
 // ---------- 새 옷 사이즈표 ----------
