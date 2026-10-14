@@ -970,7 +970,7 @@ $('#import-file').addEventListener('change', async (e) => {
     const data = JSON.parse(await file.text());
     if (!Array.isArray(data.closet) || typeof data.body !== 'object') throw new Error('형식 오류');
     if (!confirm('지금 데이터를 백업 파일로 덮어쓸까요?')) return;
-    Object.assign(state, { body: data.body, closet: data.closet, draft: data.draft || defaultDraft(), bodyAnalysis: data.bodyAnalysis || null });
+    Object.assign(state, { body: data.body, closet: data.closet, draft: data.draft || defaultDraft(), bodyAnalysis: data.bodyAnalysis || null, personalColor: data.personalColor || null });
     saveState();
     renderAll();
     alert('가져왔어요.');

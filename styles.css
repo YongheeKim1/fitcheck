@@ -252,3 +252,16 @@ body.no-scroll { overflow: hidden; }
 .live-bar select { flex: 1; min-width: 0; padding: 9px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, .35); background: transparent; color: #fff; font-size: 15px; }
 .live-bar select option { color: #000; }
 .live-bar input[type="color"] { width: 44px; height: 40px; padding: 2px; border: 1px solid rgba(255, 255, 255, .35); border-radius: 10px; background: transparent; }
+
+.block-btn { display: block; text-align: center; margin: 4px 0 10px; }
+.pick-canvas { display: block; width: auto; height: auto; max-width: 100%; max-height: 360px; margin: 0 auto 8px; border-radius: 10px; cursor: crosshair; }
+#pc-canvas-slot .pick-canvas { max-height: 420px; }
+.swatches { display: flex; justify-content: center; gap: 16px; margin: 8px 0 4px; }
+.swatch { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.swatch i { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px 5px 5px; border-radius: 999px; font-size: 13px; font-weight: 500; }
+.chip i { width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(127, 127, 127, .35); }
+.verdict-box { margin: 4px 0 12px; }
+.verdict-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.verdict-line .badge { font-size: 13px; padding: 4px 10px; }

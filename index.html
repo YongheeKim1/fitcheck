@@ -81,6 +81,14 @@
             <select id="tryon-size"></select>
           </label>
         </div>
+        <label class="ghost file-btn block-btn">상품 사진에서 색 고르기
+          <input type="file" id="product-photo" accept="image/*" hidden>
+        </label>
+        <div id="product-pick" class="hidden">
+          <p class="hint">상품 사진에서 옷 부분을 누르면 그 색을 가져와요.</p>
+          <canvas id="product-canvas" class="pick-canvas"></canvas>
+        </div>
+        <div id="color-verdict" class="verdict-box"></div>
         <div class="btn-row">
           <label class="ghost file-btn">사진으로 보기
             <input type="file" id="tryon-photo" accept="image/*" hidden>
@@ -198,6 +206,25 @@
 
       <div id="analysis-result" class="card hidden"></div>
 
+      <div class="card">
+        <h2>퍼스널 컬러 분석</h2>
+        <p class="hint">얼굴 사진으로 피부·머리·눈 색을 재서 어울리는 옷 색을 찾아요. 사진은 이 기기 안에서만 분석하고 저장하지 않아요.</p>
+        <details class="photo-guide">
+          <summary>정확하게 찍는 법</summary>
+          <ul>
+            <li>창가 자연광에서, 빛이 얼굴에 고르게 닿게</li>
+            <li>화장·필터·보정 없이 정면으로</li>
+            <li>흰 종이를 얼굴 옆에 들고 찍으면 조명 색을 보정할 수 있어요</li>
+          </ul>
+        </details>
+        <label class="ghost file-btn block-btn">얼굴 사진 고르기
+          <input type="file" id="face-photo" accept="image/*" hidden>
+        </label>
+        <p class="hint import-status" id="pc-status"></p>
+      </div>
+
+      <div id="pc-result" class="card hidden"></div>
+
       <form id="body-form" class="card">
         <h2>내 체형</h2>
         <p class="hint">줄자로 잰 <b>둘레(cm)</b>를 입력하면 옷과 몸 사이 여유분도 같이 보여 줘요. 어깨너비는 양 어깨 끝 사이 직선 길이예요. 비워 둬도 돼요.</p>
@@ -243,5 +270,7 @@
   <script src="garment.js"></script>
   <script src="app.js"></script>
   <script src="tryon.js"></script>
+  <script src="color.js"></script>
+  <script src="colorui.js"></script>
 </body>
 </html>

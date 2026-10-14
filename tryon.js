@@ -67,6 +67,7 @@ function onCompareResult() {
   }
   $('#tryon-color').value = tryon.color;
   $('#live-color').value = tryon.color;
+  if (typeof updateColorVerdict === 'function') updateColorVerdict(tryon.color);
   // 여기서 따로 고른 사진이 없으면 내 체형 탭에서 마지막으로 분석한 사진으로 바로 입혀 본다
   if (!tryon.photoUploaded && lastPhoto) tryon.photo = lastPhoto;
   if (tryon.photo) renderTryonPhoto();
@@ -84,6 +85,7 @@ function setColor(c) {
   tryon.color = c;
   $('#tryon-color').value = c;
   $('#live-color').value = c;
+  if (typeof updateColorVerdict === 'function') updateColorVerdict(c); // colorui.js
   if (tryon.photo) renderTryonPhoto();
 }
 
