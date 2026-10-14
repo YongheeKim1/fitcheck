@@ -26,7 +26,7 @@ function tryonStatus(text, kind = '') {
 // 몸 치수: 줄자로 잰 값 우선, 없으면 사진 분석 추정치
 function bodyForRender() {
   const b = state.body;
-  const a = state.bodyAnalysis;
+  const a = usableAnalysis();
   const g = a?.girths || {};
   return {
     shoulder: b.shoulder ?? a?.shoulderWidthCm ?? undefined,
@@ -35,6 +35,37 @@ function bodyForRender() {
     hip: b.hip ?? g.hip ?? undefined,
     thigh: b.thigh ?? g.thigh ?? undefined,
   };
+}
+
+// 체형 탭 사진 분석 결과: 자세가 나쁜 사진(팔을 들었거나 거울 셀카 등)으로 한 분석은 판정에 쓰지 않는다
+function usableAnalysis() {
+  const a = state.bodyAnalysis;
+  return a && !(a.poseIssues && a.poseIssues.length) ? a : null;
+}
+
+// 판정에 쓴 몸 치수가 어디서 왔는지(줄자 / 체형 사진 분석 / 이 사진에서 추정)
+const PART_NAMES = { shoulder: '어깨', chest: '가슴', waist: '허리', hip: '엉덩이', thigh: '허벅지' };
+function bodySourceNote(category) {
+  const keys = category === 'top' ? ['shoulder', 'chest'] : ['waist', 'hip', 'thigh'];
+  const a = usableAnalysis();
+  const groups = { tape: [], photo: [], est: [] };
+  for (const k of keys) {
+    if (state.body[k] != null) groups.tape.push(PART_NAMES[k]);
+    else if (a && (k === 'shoulder' ? a.shoulderWidthCm : a.girths?.[k]) != null) groups.photo.push(PART_NAMES[k]);
+    else groups.est.push(PART_NAMES[k]);
+  }
+  const parts = [];
+  if (groups.tape.length) parts.push(`줄자로 잰 값(${groups.tape.join('·')})`);
+  if (groups.photo.length) parts.push(`체형 사진 분석(${groups.photo.join('·')})`);
+  if (groups.est.length) parts.push(`이 사진에서 추정(${groups.est.join('·')})`);
+  return `판정에 쓴 내 몸 치수: ${parts.join(', ')}`;
+}
+
+// 자세 검사 결과를 안내 문장으로
+function poseAdvice(check) {
+  if (!check || check.ok) return '';
+  return `${check.issues.map((i) => i.text).join(', ')}. 옷 위치와 판정이 부정확할 수 있어요. `
+    + '정면으로 서서 팔은 몸 옆에 내리고, 머리부터 발끝까지 나오게 찍은 사진이 가장 정확해요(타이머나 다른 사람이 찍어 주기).';
 }
 
 function shoulderJointCm() {
@@ -75,9 +106,14 @@ function onCompareResult() {
   $('#live-color').value = tryon.color;
   if (typeof updateColorVerdict === 'function') updateColorVerdict(tryon.color);
   // 여기서 따로 고른 사진이 없으면 내 체형 탭에서 마지막으로 분석한 사진으로 바로 입혀 본다
-  if (!tryon.photoUploaded && lastPhoto) tryon.photo = lastPhoto;
+  // 순서: 여기서 직접 고른 사진 > 저장해 둔 기준 사진 > 체형 탭 사진
+  if (!tryon.photoUploaded) {
+    if (tryon.refPhoto) tryon.photo = tryon.refPhoto;
+    else if (lastPhoto) tryon.photo = lastPhoto;
+    if (!tryon.refPhoto && !tryon.refLoading && !tryon.refChecked) loadRefPhoto();
+  }
   if (tryon.photo) renderTryonPhoto();
-  else tryonStatus('전신 사진을 고르거나 카메라로 볼 수 있어요.');
+  else if (!tryon.refLoading) tryonStatus('전신 사진을 고르거나 카메라로 볼 수 있어요.');
 }
 
 function setSize(i) {
@@ -147,6 +183,7 @@ async function segmentScene(canvas) {
     skinColor: sn > 50 ? [sr / sn, sgc / sn, sbc / sn] : null,
     head: layer((c) => c === 1 || c === 3), // 머리카락·얼굴
     skin: layer((c) => c === 2),            // 몸 피부(손·팔)
+    others: layer((c) => c === 5),          // 소품(손에 든 휴대폰·가방 등): 손 근처만 옷 위로
     illum: estimateIllum(src.data, W, H, (x, y) => cat[Math.floor((y * h) / H) * w + Math.floor((x * w) / W)] === 0),
     // 빛 방향: 옷·피부의 줄마다 왼쪽→오른쪽 밝기 기울기
     tilt: rowTilt(src.data, W, H, (x, y) => { const c = cat[Math.floor((y * h) / H) * w + Math.floor((x * w) / W)]; return c === 2 || c === 4; }),
@@ -265,47 +302,147 @@ function renderTryonPhoto() {
   c.className = 'analysis-canvas';
   const ctx = c.getContext('2d');
   ctx.drawImage(canvas, 0, 0);
-  const opts = garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm, scene: scene || null });
+  if (!tryon.photo.poseCheck) tryon.photo.poseCheck = BodyAnalysis.checkPose(pose, canvas.width, canvas.height);
+  const check = tryon.photo.poseCheck;
+  const opts = garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm, scene: scene || null, poseIssues: check.issues.map((i) => i.key) });
   if (opts.texture && scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, scene) };
   const res = GarmentRender.draw(ctx, opts);
   $('#tryon-view').replaceChildren(c);
-  $('#tryon-notes').innerHTML = res.notes.map((n) => `<li>${esc(n)}</li>`).join('');
-  tryonStatus('');
+  const notes = res.ok ? [...res.notes, bodySourceNote(opts.category)] : res.notes;
+  $('#tryon-notes').innerHTML = notes.map((n) => `<li>${esc(n)}</li>`).join('');
+  const advice = poseAdvice(check);
+  if (advice) tryonStatus(esc(advice), 'warn');
+  else tryonStatus(tryon.photo === tryon.refPhoto ? '저장해 둔 기준 사진으로 입혀 봤어요.' : '');
+  updateRefUI();
+}
+
+// 사진(파일·Blob) → 입혀 보기용 { canvas, pose, pxPerCm, scene, poseCheck }
+async function analyzeTryonPhoto(file) {
+  const heightCm = state.body.height;
+  tryonStatus(mp ? '사진 분석 중…' : '체형 인식 모델 불러오는 중… (처음 한 번만, 약 15MB)');
+  await loadMediaPipe();
+  const canvas = await photoToCanvas(file);
+  const det = detectPose(canvas);
+  if (!det) throw new Error('사진에서 사람을 찾지 못했어요. 전신이 나온 사진인지 확인해 주세요.');
+  let pxPerCm;
+  try {
+    const f = BodyAnalysis.analyzeFront({ mask: det.mask, pose: det.pose, face: null, heightCm });
+    pxPerCm = f.pxPerCm * (canvas.width / f.maskW);
+  } catch {
+    // 발이 잘린 사진 등: 어깨 관절 간격으로 비율을 정한다
+    const sw = Math.hypot((det.pose[11].x - det.pose[12].x) * canvas.width, (det.pose[11].y - det.pose[12].y) * canvas.height);
+    pxPerCm = sw / shoulderJointCm();
+  }
+  tryonStatus('사진 속 손·얼굴·옷 위치 분석 중…');
+  const scene = await segmentScene(canvas).catch((err) => { console.error(err); return null; });
+  return { canvas, pose: det.pose, pxPerCm, scene, poseCheck: BodyAnalysis.checkPose(det.pose, canvas.width, canvas.height) };
 }
 
 $('#tryon-photo').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
-  const heightCm = state.body.height;
-  if (!heightCm) {
+  if (!state.body.height) {
     tryonStatus("'내 체형' 탭에서 키를 먼저 입력해 주세요. 키로 사진 속 크기를 cm로 바꿔요.", 'err');
     return;
   }
   try {
-    tryonStatus(mp ? '사진 분석 중…' : '체형 인식 모델 불러오는 중… (처음 한 번만, 약 15MB)');
-    await loadMediaPipe();
-    const canvas = await photoToCanvas(file);
-    const det = detectPose(canvas);
-    if (!det) throw new Error('사진에서 사람을 찾지 못했어요. 전신이 나온 사진인지 확인해 주세요.');
-    let pxPerCm;
-    try {
-      const f = BodyAnalysis.analyzeFront({ mask: det.mask, pose: det.pose, face: null, heightCm });
-      pxPerCm = f.pxPerCm * (canvas.width / f.maskW);
-    } catch {
-      // 발이 잘린 사진 등: 어깨 관절 간격으로 비율을 정한다
-      const sw = Math.hypot((det.pose[11].x - det.pose[12].x) * canvas.width, (det.pose[11].y - det.pose[12].y) * canvas.height);
-      pxPerCm = sw / shoulderJointCm();
-    }
-    tryonStatus('사진 속 손·얼굴·옷 위치 분석 중…');
-    const scene = await segmentScene(canvas).catch((err) => { console.error(err); return null; });
-    tryon.photo = { canvas, pose: det.pose, pxPerCm, scene };
+    tryon.photo = await analyzeTryonPhoto(file);
     tryon.photoUploaded = true;
     renderTryonPhoto();
   } catch (err) {
     console.error(err);
     tryonStatus(esc(/[가-힣]/.test(err.message) ? err.message : '사진을 분석하지 못했어요. 다른 사진으로 시도해 주세요.'), 'err');
   }
+});
+
+// ---------- 기준 사진: 좋은 정면 사진 한 장을 이 기기(IndexedDB)에만 저장해 두고 매번 그 사진에 입힌다 ----------
+// 서버 동기화 대상이 아니다(사진은 기기 밖으로 나가지 않는다)
+const RefStore = {
+  open() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('fitcheck-local', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('photos');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  },
+  async run(mode, fn) {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('photos', mode);
+      const req = fn(tx.objectStore('photos'));
+      tx.oncomplete = () => { db.close(); resolve(req.result); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  },
+  get() { return this.run('readonly', (st) => st.get('ref')); },
+  put(blob) { return this.run('readwrite', (st) => st.put(blob, 'ref')); },
+  clear() { return this.run('readwrite', (st) => st.delete('ref')); },
+};
+
+async function loadRefPhoto() {
+  if (!('indexedDB' in window) || !state.body.height) return;
+  tryon.refLoading = true;
+  try {
+    const blob = await RefStore.get();
+    tryon.refChecked = true;
+    tryon.refSaved = !!blob;
+    if (!blob) return;
+    const photo = await analyzeTryonPhoto(blob);
+    tryon.refPhoto = photo;
+    if (!tryon.photoUploaded) { tryon.photo = photo; renderTryonPhoto(); }
+  } catch (err) {
+    console.error(err);
+  } finally {
+    tryon.refLoading = false;
+    updateRefUI();
+    if (!tryon.photo) tryonStatus('전신 사진을 고르거나 카메라로 볼 수 있어요.');
+  }
+}
+
+function updateRefUI() {
+  const p = tryon.photo;
+  const canSave = !!p && p !== tryon.refPhoto;
+  const bad = !!(p?.poseCheck && !p.poseCheck.ok);
+  $('#ref-photo').classList.toggle('hidden', !canSave && !tryon.refSaved);
+  $('#ref-save').classList.toggle('hidden', !canSave);
+  $('#ref-save').disabled = bad;
+  $('#ref-clear').classList.toggle('hidden', !tryon.refSaved);
+  $('#ref-status').textContent = p && p === tryon.refPhoto
+    ? '기준 사진으로 입혀 보고 있어요. 사진은 이 기기에만 저장돼 있어요.'
+    : bad ? '자세가 좋은 사진만 기준 사진으로 저장할 수 있어요.'
+    : tryon.refSaved ? '저장해 둔 기준 사진이 있어요(이 기기에만). 이 사진으로 바꿔 저장할 수도 있어요.'
+    : '이 사진을 저장해 두면 다음부터 사진을 고르지 않아도 바로 입혀 볼 수 있어요(이 기기에만 저장).';
+}
+
+$('#ref-save').addEventListener('click', async () => {
+  const p = tryon.photo;
+  if (!p) return;
+  $('#ref-save').disabled = true;
+  tryonStatus('기준 사진 저장 중…');
+  try {
+    const blob = await new Promise((r) => p.canvas.toBlob(r, 'image/jpeg', 0.92));
+    await RefStore.put(blob);
+    tryon.refPhoto = p;
+    tryon.refSaved = true;
+    tryonStatus('기준 사진으로 저장했어요. 이 기기에만 저장되고 서버로 보내지 않아요.', 'ok');
+  } catch (err) {
+    console.error(err);
+    tryonStatus('기준 사진을 저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.', 'err');
+  }
+  updateRefUI();
+});
+
+$('#ref-clear').addEventListener('click', async () => {
+  try { await RefStore.clear(); } catch (err) { console.error(err); }
+  if (tryon.photo === tryon.refPhoto && !tryon.photoUploaded) tryon.photo = lastPhoto || null;
+  tryon.refPhoto = null;
+  tryon.refSaved = false;
+  if (tryon.photo) renderTryonPhoto();
+  else { $('#tryon-view').replaceChildren(); $('#tryon-notes').innerHTML = ''; }
+  tryonStatus('기준 사진을 지웠어요.');
+  updateRefUI();
 });
 
 // ---------- 라이브 카메라 모드 ----------

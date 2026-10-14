@@ -294,7 +294,39 @@
     return { name: '균형형', desc: '어깨와 엉덩이 비율이 고른 체형이에요.', tip: '상의는 어깨, 바지는 허리 기준으로 고르고 가슴·허벅지 여유만 확인하면 돼요.' };
   }
 
-  const api = { analyzeFront, analyzeSide, estimateGirths, bodyShape, ellipse };
+  // 자세 검사: 치수 추정과 입혀 보기가 정확하려면 "정면, 팔은 몸 옆으로 내림, 머리~발끝이 다 보임"이어야 한다.
+  // pose: MediaPipe 랜드마크(0~1 좌표), W/H: 사진 크기. issues가 비어 있으면 좋은 사진
+  function checkPose(pose, W, H) {
+    const P = (i) => ({ x: pose[i].x * W, y: pose[i].y * H, v: pose[i].visibility ?? 1 });
+    const sh = [P(11), P(12)], hp = [P(23), P(24)];
+    const shW = Math.hypot(sh[0].x - sh[1].x, sh[0].y - sh[1].y);
+    const shMid = { x: (sh[0].x + sh[1].x) / 2, y: (sh[0].y + sh[1].y) / 2 };
+    const hipMid = { x: (hp[0].x + hp[1].x) / 2, y: (hp[0].y + hp[1].y) / 2 };
+    const torso = Math.hypot(hipMid.x - shMid.x, hipMid.y - shMid.y) || 1;
+    const issues = [];
+    const add = (key, text) => { if (!issues.some((i) => i.key === key)) issues.push({ key, text }); };
+    const nose = P(0);
+    const xL = Math.min(sh[0].x, sh[1].x, hp[0].x, hp[1].x), xR = Math.max(sh[0].x, sh[1].x, hp[0].x, hp[1].x);
+    for (const [s, e, w] of [[11, 13, 15], [12, 14, 16]]) {
+      const S = P(s), E = P(e), Wr = P(w);
+      // 팔을 들었다: 손목이나 팔꿈치가 어깨 높이 근처보다 위
+      if (Wr.y < S.y + torso * 0.25 || E.y < S.y + torso * 0.1) add('armUp', '팔을 들고 있어요');
+      // 얼굴 앞 손(거울 셀카·휴대폰)
+      if (Math.hypot(Wr.x - nose.x, Wr.y - nose.y) < shW * 0.7) add('face', '손이나 휴대폰이 얼굴을 가려요');
+      // 팔이 몸통 앞을 가로지른다: 손목이 몸통 폭 안쪽 깊숙이, 어깨~골반 높이
+      const inX = Wr.x > xL + (xR - xL) * 0.25 && Wr.x < xR - (xR - xL) * 0.25;
+      if (inX && Wr.y > shMid.y && Wr.y < hipMid.y + torso * 0.1) add('armCross', '팔이 몸 앞을 가리고 있어요');
+    }
+    // 옆으로 돌아섰다: 어깨 폭이 몸통 길이에 비해 너무 좁다(정면이면 보통 0.6~0.8)
+    if (shW / torso < 0.45) add('turned', '몸이 옆으로 돌아 있어요');
+    // 발끝까지 안 나왔다
+    const feet = [27, 28, 29, 30].map(P);
+    if (feet.some((f) => f.y > H * 0.995 || f.v < 0.3)) add('cut', '발끝까지 나오지 않았어요');
+    if (P(0).y < 0 || P(0).v < 0.3) add('head', '얼굴이 잘 안 보여요(가려졌거나 잘렸어요)');
+    return { ok: issues.length === 0, issues };
+  }
+
+  const api = { analyzeFront, analyzeSide, estimateGirths, bodyShape, ellipse, checkPose };
   root.BodyAnalysis = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

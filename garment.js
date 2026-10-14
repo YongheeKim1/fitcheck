@@ -499,16 +499,19 @@
       segs.push({ a: P(h), b: P(k), r: thighR }, { a: P(k), b: P(a), r: thighR * 0.7 }, { a: P(a), b: P(heel), r: 5 * s });
     }
     const hands = [];
+    const props = [];
     const arms = [];
     for (const [sh, el, wr, fi] of [[11, 13, 15, 19], [12, 14, 16, 20]]) {
       const armSegs = [{ a: P(sh), b: P(el), r: 5.5 * s }, { a: P(el), b: P(wr), r: 4.5 * s }, { a: P(wr), b: P(fi), r: 5 * s }];
       segs.push(...armSegs);
       // 피부로 덮어도 되는 곳: 위팔의 아래쪽(어깨에서 45% 아래부터 팔꿈치까지) — 소매 끝이 오는 자리
       arms.push({ a: lerpV(P(sh), P(el), 0.45), b: P(el), r: 5 * s });
-      hands.push({ a: P(el), b: P(wr), r: 4.8 * s }, { a: P(wr), b: P(fi), r: 5.5 * s });
+      // 팔 전체(어깨~손끝)는 몸통 앞에 있다: 사진 속 피부가 보이는 곳은 옷 위로 올린다(새 소매 안쪽은 composeScene에서 뺀다)
+      hands.push({ a: lerpV(P(sh), P(el), 0.15), b: P(el), r: 5 * s }, { a: P(el), b: P(wr), r: 4.8 * s }, { a: P(wr), b: P(fi), r: 5.5 * s });
+      props.push({ a: P(wr), b: P(fi), r: 10 * s }); // 손에 든 물건(휴대폰 등)
     }
     segs.push({ a: M, b: sub(M, mul(u, 12 * s)), r: 6 * s }); // 목
-    return { torsoPoly, segs, hands, arms, s };
+    return { torsoPoly, segs, hands, props, arms, s };
   }
 
   function strokeSegs(g, segs) {
@@ -769,6 +772,16 @@
     fg.drawImage(scene.skin, 0, 0, W, H);
     fg.globalCompositeOperation = 'source-over';
     ctx.drawImage(front, 0, 0);
+    // 손에 든 물건(휴대폰 등): 손 둘레 안의 소품 픽셀만
+    if (scene.others && geo.props) {
+      fg.clearRect(0, 0, W, H);
+      fg.strokeStyle = '#fff';
+      strokeSegs(fg, geo.props);
+      fg.globalCompositeOperation = 'source-in';
+      fg.drawImage(scene.others, 0, 0, W, H);
+      fg.globalCompositeOperation = 'source-over';
+      ctx.drawImage(front, 0, 0);
+    }
     ctx.drawImage(scene.head, 0, 0, W, H);
   }
 
@@ -986,16 +999,17 @@
     }
     }
 
-    // 끼는 곳 표시
-    if (2 * g.waist * give < body.waist) {
+    // 끼는 곳 표시(자세가 나쁜 사진에서 관절 간격으로 추정한 몸 치수와는 비교하지 않는다)
+    const unsure = (k) => body.estimated.includes(k) && (o.poseIssues || []).length > 0;
+    if (2 * g.waist * give < body.waist && !unsure('waist')) {
       markTight(ctx, sub(T, mul(n, wW / 2)), add(T, mul(n, wW / 2)), lw);
       notes.push(`허리가 몸보다 ${cmText(body.waist - 2 * g.waist)} 작아요.`);
     }
-    if (2 * gHip * give < body.hip) {
+    if (2 * gHip * give < body.hip && !unsure('hip')) {
       markTight(ctx, sub(Hl, mul(n, hW / 2)), add(Hl, mul(n, hW / 2)), lw);
       notes.push(`엉덩이가 몸보다 ${cmText(body.hip - 2 * gHip)} 작아요.`);
     }
-    if (pos.tight) {
+    if (pos.tight && !unsure('thigh')) {
       for (const leg of legs) markTight(ctx, leg.outer[1], leg.inner[1], lw);
       notes.push(`허벅지가 몸보다 ${cmText(body.thigh - 2 * g.thigh)} 작아요.`);
     }
@@ -1014,7 +1028,11 @@
     notes.push(above > 0.3 ? '허리선이 자연 허리 근처까지 올라와요(하이라이즈).'
       : above > 0.15 ? '허리선이 골반 위에 걸쳐요(미드라이즈).' : '허리선이 골반 아래에 걸쳐요(로우라이즈).');
 
-    if (body.estimated.length) notes.push('몸 치수 일부를 관절 간격으로 추정했어요. 내 체형에 치수를 넣으면 더 정확해요.');
+    if (body.estimated.length) {
+      notes.push((o.poseIssues || []).length
+        ? '이 사진 자세로는 몸 치수를 추정하기 어려워서 몸과의 비교(끼는 곳)는 뺐어요. 내 체형 탭에 줄자로 잰 치수를 넣으면 비교해 드려요.'
+        : '몸 치수 일부를 관절 간격으로 추정했어요. 내 체형에 치수를 넣으면 더 정확해요.');
+    }
     if (guessed.length) notes.push(`사이즈표에 ${guessed.join('·')} 실측이 없어서 다른 치수로 추정해 그렸어요.`);
     // 밑단 아래 원래 바지를 지울 수 있는 가장 낮은 줄: 발목과 발꿈치 사이(그 아래는 신발)
     const ankY = Math.max(P(27).y, P(28).y);
@@ -1139,8 +1157,9 @@
         }
         const ck = outer.length - 2; // 끝에서 한 칸 안쪽(약 3~4cm)
         cuffs.push([outer[ck], inner[ck]]);
-        if (side > 0) {
-          // 소매 끝 위치 안내(한쪽만)
+        const armOdd = (o.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross' || k === 'face');
+        if (side > 0 && !armOdd) {
+          // 소매 끝 위치 안내(한쪽만). 팔을 들었거나 몸 앞에 있으면 손목 위치를 믿을 수 없어 뺀다
           if (g.sleeve > 40) {
             const diff = g.sleeve - toWrist / s;
             notes.push(Math.abs(diff) < 1.5 ? '소매 끝이 손목에 딱 맞게 와요.'
@@ -1275,16 +1294,21 @@
       line(ctx, [hemL, hemR], { color: stitchC, width: thin, alpha: 0.45, dash: [lw * 1.6, lw * 1.2], smooth: false });
     }
 
-    if (2 * g.chest * give < body.chest) {
+    const unsure = (k) => body.estimated.includes(k) && (o.poseIssues || []).length > 0;
+    if (2 * g.chest * give < body.chest && !unsure('chest')) {
       markTight(ctx, armpit(-1), armpit(1), lw);
       notes.push(`가슴이 몸보다 ${cmText(body.chest - 2 * g.chest)} 작아요.`);
     }
     if (drop >= 2) notes.push(`어깨선이 내 어깨보다 약 ${cmText(drop)} 내려와요(드롭숄더).`);
-    else if (g.shoulder < body.shoulder - 2) notes.push(`어깨가 내 어깨보다 ${cmText(body.shoulder - g.shoulder)} 좁아요. 어깨가 낄 수 있어요.`);
+    else if (g.shoulder < body.shoulder - 2 && !unsure('shoulder')) notes.push(`어깨가 내 어깨보다 ${cmText(body.shoulder - g.shoulder)} 좁아요. 어깨가 낄 수 있어요.`);
 
     const hemVsHip = dot(sub(hemC, hipMid), u) / s;
     notes.push(hemVsHip >= 0 ? `밑단이 골반선보다 약 ${cmText(hemVsHip)} 아래로 내려와요.` : `밑단이 골반선보다 약 ${cmText(hemVsHip)} 위에 와요(짧은 기장).`);
-    if (body.estimated.length) notes.push('몸 치수 일부를 관절 간격으로 추정했어요. 내 체형에 치수를 넣으면 더 정확해요.');
+    if (body.estimated.length) {
+      notes.push((o.poseIssues || []).length
+        ? '이 사진 자세로는 몸 치수를 추정하기 어려워서 몸과의 비교(끼는 곳)는 뺐어요. 내 체형 탭에 줄자로 잰 치수를 넣으면 비교해 드려요.'
+        : '몸 치수 일부를 관절 간격으로 추정했어요. 내 체형에 치수를 넣으면 더 정확해요.');
+    }
     if (guessed.length) notes.push(`사이즈표에 ${guessed.join('·')} 실측이 없어서 다른 치수로 추정해 그렸어요.`);
     const zoneTop = Math.min(HPS.y, seam(-1).y, seam(1).y) - 3 * s;
     return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: sleeves, zone: [zoneTop, Math.max(hemC.y, hipMid.y) + 4 * s] } };

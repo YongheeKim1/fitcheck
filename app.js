@@ -903,6 +903,11 @@ $('#run-analysis').addEventListener('click', async () => {
     if (!det) throw new Error('사진에서 사람을 찾지 못했어요. 전신이 나온 사진인지 확인해 주세요.');
     const face = detectFace(frontCanvas, det.pose);
     const front = BodyAnalysis.analyzeFront({ mask: det.mask, pose: det.pose, face, heightCm });
+    // 자세 검사: 팔을 들었거나 몸 앞을 가리면 둘레 추정이 크게 틀어진다 → 경고하고 옷 판정에는 쓰지 않는다
+    const poseCheck = BodyAnalysis.checkPose(det.pose, frontCanvas.width, frontCanvas.height);
+    if (!poseCheck.ok) {
+      front.warnings.push(`${poseCheck.issues.map((i) => i.text).join(', ')}. 이 사진으로 추정한 치수는 옷 판정에 쓰지 않아요. 정면으로 서서 팔을 몸 옆에 내리고, 머리부터 발끝까지 나오게 다시 찍어 주세요.`);
+    }
 
     let sideDepth = null;
     if (photos.side) {
@@ -914,9 +919,9 @@ $('#run-analysis').addEventListener('click', async () => {
 
     const girths = BodyAnalysis.estimateGirths(front, sideDepth);
     const shape = BodyAnalysis.bodyShape(front);
-    lastPhoto = { canvas: frontCanvas, pose: det.pose, pxPerCm: front.pxPerCm * (frontCanvas.width / front.maskW) };
+    lastPhoto = { canvas: frontCanvas, pose: det.pose, pxPerCm: front.pxPerCm * (frontCanvas.width / front.maskW), poseCheck };
     const { draw, levels, pxPerCm, maskW, ...numbers } = front;
-    state.bodyAnalysis = { date: new Date().toISOString().slice(0, 10), ...numbers, girths, shape };
+    state.bodyAnalysis = { date: new Date().toISOString().slice(0, 10), ...numbers, girths, shape, poseIssues: poseCheck.issues.map((i) => i.key) };
     saveState();
 
     setAnalysisStatus('');

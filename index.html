@@ -76,7 +76,7 @@
 
       <div id="tryon" class="card hidden">
         <h2>내 몸에 입혀 보기</h2>
-        <p class="hint">실측 그대로 내 몸 위에 옷 모양을 그려요. 사진처럼 합성한 것이 아니라 크기와 위치를 보여 주는 도식이에요.</p>
+        <p class="hint">사이즈표 실측 크기 그대로 내 사진 위에 옷을 입혀요. 사진은 이 기기 안에서만 처리하고 밖으로 보내지 않아요.</p>
         <div class="row2">
           <label class="field">옷 색
             <input type="color" id="tryon-color" value="#34507f">
@@ -104,6 +104,14 @@
             <input type="file" id="tryon-photo" accept="image/*" hidden>
           </label>
           <button type="button" class="primary" id="open-live">카메라로 보기</button>
+        </div>
+        <p class="hint">정확하게 보려면: 정면으로 서서 팔은 몸 옆에 내리고, 머리부터 발끝까지 나오게 찍어 주세요. 거울 셀카보다 타이머나 다른 사람이 찍어 준 사진이 좋아요.</p>
+        <div id="ref-photo" class="ref-photo hidden">
+          <p class="hint" id="ref-status"></p>
+          <div class="btn-row">
+            <button type="button" class="ghost" id="ref-save">이 사진을 기준 사진으로 저장</button>
+            <button type="button" class="ghost" id="ref-clear">기준 사진 지우기</button>
+          </div>
         </div>
         <p class="hint import-status" id="tryon-status"></p>
         <div id="tryon-view"></div>
