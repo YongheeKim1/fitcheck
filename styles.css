@@ -265,3 +265,5 @@ body.no-scroll { overflow: hidden; }
 .verdict-box { margin: 4px 0 12px; }
 .verdict-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .verdict-line .badge { font-size: 13px; padding: 4px 10px; }
+
+.sync-badge { margin-left: auto; font-size: 12px; color: var(--muted); }

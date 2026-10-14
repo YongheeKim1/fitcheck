@@ -45,7 +45,8 @@ const STORE_KEY = 'fitcheck:v1';
 const state = loadState();
 
 function loadState() {
-  const empty = { body: {}, closet: [], draft: null };
+  // updatedAt: 프로필(체형·분석·작성 중 표)을 마지막으로 고친 시각, tombstones: 지운 옷(다른 기기에 삭제 전달용)
+  const empty = { body: {}, closet: [], draft: null, updatedAt: 0, tombstones: [] };
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return empty;
@@ -53,18 +54,33 @@ function loadState() {
     // 상의 지원 이전에 저장한 데이터는 모두 바지
     st.closet.forEach((p) => { p.category = p.category || 'bottom'; });
     if (st.draft) st.draft.category = st.draft.category || 'bottom';
+    // 동기화 기능 이전에 저장한 데이터: 지금 고친 것으로 표시해야 서버의 빈 데이터에 밀리지 않는다
+    const now = Date.now();
+    if (!st.updatedAt && Object.keys(st.body || {}).length) st.updatedAt = now;
+    st.closet.forEach((p) => { p.updatedAt = p.updatedAt || now; });
     return st;
   } catch {
     return empty;
   }
 }
 
-function saveState() {
+// 프로필 내용이 실제로 바뀌었을 때만 updatedAt을 갱신한다(옷만 고쳤는데 프로필이 "최신"이 되어
+// 다른 기기의 체형 수정을 덮어쓰지 않게)
+const profileJson = () => JSON.stringify([state.body, state.bodyAnalysis ?? null, state.personalColor ?? null, state.draft]);
+let lastProfileJson = profileJson();
+
+function saveState({ fromSync = false } = {}) {
+  const pj = profileJson();
+  if (pj !== lastProfileJson) {
+    if (!fromSync) state.updatedAt = Date.now();
+    lastProfileJson = pj;
+  }
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
   } catch {
     // 저장 실패(사생활 보호 모드 등)는 무시: 화면은 계속 동작
   }
+  if (!fromSync && typeof scheduleSync === 'function') scheduleSync(); // sync.js: 로그인돼 있으면 서버에 올린다
 }
 
 // ---------- 유틸 ----------
@@ -167,6 +183,7 @@ $('#closet-list').addEventListener('click', (e) => {
     const p = state.closet.find((x) => x.id === delId);
     if (p && confirm(`'${p.name}'을(를) 삭제할까요?`)) {
       state.closet = state.closet.filter((x) => x.id !== delId);
+      state.tombstones = [...(state.tombstones || []).filter((t) => t.id !== delId), { id: delId, updatedAt: Date.now() }];
       saveState();
       renderCloset();
     }
@@ -225,6 +242,7 @@ $('#item-form').addEventListener('submit', (e) => {
   };
   // form.elements['length']는 칸 개수(숫자)를 돌려주므로 이름으로 직접 찾는다
   for (const pt of partsOf(category)) item[pt.key] = num(form.querySelector(`[name="${pt.key}"]`).value);
+  item.updatedAt = Date.now();
 
   const idx = state.closet.findIndex((p) => p.id === id);
   if (idx >= 0) state.closet[idx] = item;
@@ -239,6 +257,7 @@ function defaultDraft() {
   return { category: 'bottom', name: '', stretch: 'none', refId: null, rows: [{ size: 'S' }, { size: 'M' }, { size: 'L' }] };
 }
 if (!state.draft) state.draft = defaultDraft();
+lastProfileJson = profileJson(); // 기본값을 채운 건 "고친 것"이 아니다(새 기기의 빈 프로필이 서버 데이터를 덮어쓰지 않게)
 
 function renderSizeTable() {
   const parts = partsOf(state.draft.category);
@@ -970,7 +989,12 @@ $('#import-file').addEventListener('change', async (e) => {
     const data = JSON.parse(await file.text());
     if (!Array.isArray(data.closet) || typeof data.body !== 'object') throw new Error('형식 오류');
     if (!confirm('지금 데이터를 백업 파일로 덮어쓸까요?')) return;
-    Object.assign(state, { body: data.body, closet: data.closet, draft: data.draft || defaultDraft(), bodyAnalysis: data.bodyAnalysis || null, personalColor: data.personalColor || null });
+    // 가져온 데이터를 지금 시각으로 고친 것으로 표시해서, 로그인돼 있으면 서버에도 올라가게 한다
+    const now = Date.now();
+    Object.assign(state, {
+      body: data.body, closet: data.closet.map((p) => ({ ...p, updatedAt: now })), draft: data.draft || defaultDraft(),
+      bodyAnalysis: data.bodyAnalysis || null, personalColor: data.personalColor || null, tombstones: [],
+    });
     saveState();
     renderAll();
     alert('가져왔어요.');

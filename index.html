@@ -15,6 +15,7 @@
   <header class="topbar">
     <h1>핏체크</h1>
     <span class="sub">옷 핏 예측</span>
+    <span class="sync-badge" id="sync-badge"></span>
   </header>
 
   <main>
@@ -175,6 +176,8 @@
 
     <!-- 내 정보 -->
     <section id="tab-body" class="tab">
+      <div id="account" class="card"></div>
+
       <div class="card">
         <h2>사진으로 체형 분석</h2>
         <p class="hint">키를 기준으로 전신 사진에서 등신과 몸 비율을 계산해요. 사진은 이 기기 안에서만 분석하고 저장하지 않아요.</p>
@@ -272,5 +275,7 @@
   <script src="tryon.js"></script>
   <script src="color.js"></script>
   <script src="colorui.js"></script>
+  <script src="config.js"></script>
+  <script src="sync.js"></script>
 </body>
 </html>
