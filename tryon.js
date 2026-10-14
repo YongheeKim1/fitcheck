@@ -12,6 +12,9 @@ const tryon = {
   photo: null,       // { canvas, pose, pxPerCm }
   live: null,        // { stream, raf, landmarker, facing, smooth, scale, lastHint }
   liveModel: null,
+  garment: null,     // 상품 사진에서 오려낸 옷(garmentsource.js 결과)
+  garmentFile: null, // 종류(상의/바지)가 바뀌면 다시 분석하려고 보관
+  useTexture: true,  // 옷 사진으로 입히기 / 단색 도식
 };
 
 function tryonStatus(text, kind = '') {
@@ -46,6 +49,7 @@ function garmentOpts(extra) {
     color: tryon.color,
     stretch: state.draft.stretch,
     body: bodyForRender(),
+    texture: tryon.useTexture && tryon.garment?.category === lastResults.category ? tryon.garment : null,
     ...extra,
   };
 }
@@ -59,6 +63,8 @@ function onCompareResult() {
     tryon.category = category;
     tryon.color = DEFAULT_COLOR[category];
   }
+  // 상품 사진을 이미 골랐는데 종류(상의/바지)가 바뀌었으면 그 종류의 옷을 다시 오려낸다(colorui.js)
+  if (tryon.garmentFile && tryon.garment?.category !== category && typeof cutGarment === 'function') cutGarment();
   const options = results.map((r, i) =>
     `<option value="${i}">${esc(r.row.size || `#${i + 1}`)}${r === best ? ' (추천)' : ''}</option>`).join('');
   for (const id of ['#tryon-size', '#live-size']) {

@@ -205,7 +205,51 @@ $('#product-photo').addEventListener('change', async (e) => {
   const src = await photoToCanvas(file, 1000);
   productImg = { canvas: src, img: src.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, src.width, src.height) };
   drawProduct();
+  $('#pick-status').textContent = '옷 부분을 누르면 그 색을 평가해요.';
   $('#product-pick').classList.remove('hidden');
+  tryon.garmentFile = file;
+  cutGarment();
+});
+
+// 상품 사진에서 옷을 오려내 입혀 보기에 쓴다(기기 안에서 처리)
+async function cutGarment() {
+  if (!tryon.garmentFile || !lastResults) return;
+  const cat = lastResults.category;
+  $('#garment-cut').classList.add('hidden');
+  tryonStatus(clothesSegmenter ? '옷을 오려내는 중…' : '옷 인식 모델 불러오는 중… (처음 한 번만, 약 16MB)');
+  try {
+    const g = await analyzeGarmentPhoto(tryon.garmentFile, cat);
+    if (!g) {
+      tryon.garment = null;
+      tryonStatus(`사진에서 ${CATEGORY_LABEL[cat]}를 찾지 못했어요. 모델이 입은 사진이나 옷만 찍힌 사진을 써 주세요. 지금은 색만 써서 그려요.`, 'err');
+      return;
+    }
+    tryon.garment = g;
+    tryon.useTexture = true;
+    // 오려낸 옷 미리보기
+    const c = $('#garment-cut-canvas');
+    const k = Math.min(1, 360 / g.texture.height);
+    c.width = Math.round(g.texture.width * k);
+    c.height = Math.round(g.texture.height * k);
+    const cg = c.getContext('2d');
+    cg.clearRect(0, 0, c.width, c.height);
+    cg.drawImage(g.texture, 0, 0, c.width, c.height);
+    $('#garment-cut').classList.remove('hidden');
+    $('#texture-toggle').textContent = '단색 도식으로 보기';
+    setColor(g.avgColor); // 색 평가는 옷의 평균색으로
+    tryonStatus(g.kind === 'flat'
+      ? '옷만 찍힌 사진이라 몸판(바지는 다리까지)만 사진으로 입혔어요. 소매는 옷 색으로 그려요.'
+      : `상품 사진의 ${CATEGORY_LABEL[cat]}를 실측 크기에 맞춰 입혔어요.`, 'ok');
+  } catch (err) {
+    console.error(err);
+    tryonStatus('옷을 오려내지 못했어요. 다른 상품 사진으로 시도해 주세요.', 'err');
+  }
+}
+
+$('#texture-toggle').addEventListener('click', () => {
+  tryon.useTexture = !tryon.useTexture;
+  $('#texture-toggle').textContent = tryon.useTexture ? '단색 도식으로 보기' : '옷 사진으로 보기';
+  if (tryon.photo) renderTryonPhoto();
 });
 
 function drawProduct(mark) {
@@ -238,7 +282,10 @@ $('#product-canvas').addEventListener('click', (e) => {
   const lin = PersonalColor.robustMean(PersonalColor.sampleCircle(productImg.img, x, y, r), 0.25, 0.75);
   if (!lin) return;
   drawProduct({ x, y, r });
-  setColor(PersonalColor.linearToHex(lin));
+  const hex = PersonalColor.linearToHex(lin);
+  setColor(hex);
+  // 고른 색을 바로 보여 준다(눌렀는데 안 바뀐 것처럼 느껴지지 않게)
+  $('#pick-status').innerHTML = `<i class="pick-swatch" style="background:${hex}"></i> 이 색으로 입혀 볼게요. 다른 곳을 누르면 다시 골라요.`;
 });
 
 // ---------- 시작 ----------

@@ -91,6 +91,12 @@
         <div id="product-pick" class="hidden">
           <p class="hint">상품 사진에서 옷 부분을 누르면 그 색을 가져와요.</p>
           <canvas id="product-canvas" class="pick-canvas"></canvas>
+          <p class="hint pick-status" id="pick-status"></p>
+        </div>
+        <div id="garment-cut" class="garment-cut hidden">
+          <p class="hint">상품 사진에서 오려낸 옷이에요. 실측 크기에 맞춰 내 사진에 입혀요.</p>
+          <canvas id="garment-cut-canvas"></canvas>
+          <button type="button" class="ghost block" id="texture-toggle">단색 도식으로 보기</button>
         </div>
         <div id="color-verdict" class="verdict-box"></div>
         <div class="btn-row">
@@ -286,6 +292,7 @@
   <script src="garment.js"></script>
   <script src="app.js"></script>
   <script src="tryon.js"></script>
+  <script src="garmentsource.js"></script>
   <script src="color.js"></script>
   <script src="colorui.js"></script>
   <script src="config.js"></script>

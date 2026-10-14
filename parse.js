@@ -18,15 +18,15 @@
     { key: null, re: re('뒷밑위', '뒤밑위', '인심', '안기장', '안쪽기장', '무릎', '종아리', 'inseam', 'knee',
       '소매부리', '소매통', '소매단', '소매폭', '커프스', '소매둘레', '암홀', '진동', '화장', '팔통', '목너비', '넥') },
     { key: 'size', re: re('사이즈', '호칭', '치수', 'size') },
-    { key: 'waist', re: re('허리', 'waist') },
+    { key: 'waist', re: re('허리', '허라', 'waist') },
     { key: 'hip', re: re('엉덩이', '힙', 'hip') },
     { key: 'thigh', re: re('허벅지', '허벅치', 'thigh') },
     { key: 'rise', re: re('앞밑위', '밑위', '밑의', 'rise') },
     { key: 'hem', re: re('밑단', '밑통', 'hem') },
     // 가슴·어깨는 뒤에 붙은 "둘레/단면"을 따로 확인해야 해서 짧게 잡는다
-    { key: 'shoulder', re: re('어깨', 'shoulder') },
-    { key: 'chest', re: re('가슴', 'chest', 'bust') },
-    { key: 'sleeve', re: re('소매길이', '소매기장', '소매', '팔길이', 'sleeve') },
+    { key: 'shoulder', re: re('어깨', '어께', '어꺠', 'shoulder') },
+    { key: 'chest', re: re('가슴', '가숨', '기슴', '가승', '가씀', '가쓸', 'chest', 'bust') },
+    { key: 'sleeve', re: re('소매길이', '소매기장', '소매', '소메', '팔길이', 'sleeve') },
     { key: 'length', re: re('총기장', '총장', '종장', '총징', '바지길이', '기장', 'length') },
   ];
 
@@ -102,15 +102,18 @@
     const valueCols = cols.filter((c) => c.key !== 'size');
     const rows = [];
     let shortRows = 0;
+    let longRows = 0;
 
     for (const line of lines.slice(headerIdx + 1)) {
       if (findColumns(line).filter((c) => c.key && c.key !== 'size').length >= 2) break; // 다른 표 시작
+      // 쇼핑몰 앱 사이즈표의 "내 사이즈" 줄은 상품 사이즈가 아니라 내가 저장해 둔 치수다
+      if (/^(내|나의)\s*사이즈|^my\s*size/i.test(line)) continue;
       const toks = tokens(line);
       if (!toks.length) continue;
       let label = '';
       let nums = toks.map((t) => (isBlankCell(t) ? BLANK : toNumber(t)));
       if (nums[0] === null) {
-        label = cleanToken(toks[0]);
+        label = cleanSizeLabel(cleanToken(toks[0]));
         nums = nums.slice(1);
       }
       nums = nums.filter((n) => n !== null); // 빈 칸(NaN)은 남겨서 열 위치를 지킨다
@@ -125,6 +128,7 @@
       }
       if (nums.length < 2) continue;
       if (nums.length < valueCols.length) shortRows++;
+      if (nums.length > valueCols.length) longRows++; // 이름을 못 읽은 열이 있다는 뜻
       const row = { size: label };
       valueCols.forEach((c, i) => {
         if (c.key && nums[i] !== undefined && !Number.isNaN(nums[i])) row[c.key] = nums[i];
@@ -143,7 +147,14 @@
       }
       if (run.length >= rows.length) rows.forEach((r, k) => { r.size = run[k]; });
     }
-    return { rows, cols: valueCols, shortRows };
+    return { rows, cols: valueCols, shortRows, longRows };
+  }
+
+  // 사이즈 이름 앞에 붙은 번호·선택 표시 떼기: "0.S" → "S", "1M" → "M", "2.L" → "L" ("2XL"은 그대로)
+  function cleanSizeLabel(s) {
+    if (/^\d[.,]\s*[a-z]+$/i.test(s)) return s.replace(/^\d[.,]\s*/, '');
+    if (/^\d[sml]$/i.test(s)) return s.slice(1);
+    return s;
   }
 
   // ---- 2) 세로형 ----
@@ -277,8 +288,9 @@
       return { rows: [], parts: [], category: null, warnings: ['사이즈표를 찾지 못했어요. 허리·가슴 같은 항목 이름이 포함돼 있는지 확인해 주세요.'] };
     }
 
-    const { rows, cols, shortRows } = result;
+    const { rows, cols, shortRows, longRows } = result;
     if (shortRows) warnings.push(`${shortRows}개 행은 숫자가 모자라요. 빠진 칸이 없는지 확인해 주세요.`);
+    if (longRows) warnings.push('이름을 읽지 못한 열이 있어서 숫자가 한 칸씩 밀렸을 수 있어요. 원본 사이즈표와 꼭 비교해 주세요.');
 
     // 상의/하의 판별: 어깨·가슴·소매가 더 많이 보이면 상의
     const has = (k) => rows.some((r) => r[k] != null);
