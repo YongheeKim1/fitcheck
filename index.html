@@ -123,9 +123,44 @@
 
     <!-- 내 옷 -->
     <section id="tab-closet" class="tab">
+      <div class="card" id="outfit">
+        <h2>코디 미리보기</h2>
+        <p class="hint">옷장의 상의와 하의를 골라 내 사진에 함께 입혀 봐요. 등록한 실측 그대로 입혀서 실제 핏과 기장을 볼 수 있어요.</p>
+        <div class="row2">
+          <label class="field">상의
+            <select id="outfit-top"></select>
+          </label>
+          <label class="field">하의
+            <select id="outfit-bottom"></select>
+          </label>
+        </div>
+        <label class="field">입는 방식
+          <select id="outfit-tuck">
+            <option value="out">상의를 꺼내 입기</option>
+            <option value="in">상의를 바지 안에 넣어 입기</option>
+          </select>
+        </label>
+        <div class="btn-row">
+          <label class="ghost file-btn">모델 사진 바꾸기
+            <input type="file" id="outfit-photo" accept="image/*" hidden>
+          </label>
+          <button type="button" class="primary" id="outfit-run">입혀 보기</button>
+        </div>
+        <p class="hint import-status" id="outfit-status"></p>
+        <div id="outfit-view"></div>
+        <ul id="outfit-notes" class="note-list"></ul>
+        <div class="row2 outfit-save">
+          <label class="field">코디 이름
+            <input id="outfit-name" type="text" placeholder="예: 출근룩">
+          </label>
+          <button type="button" class="ghost" id="outfit-save">이 코디 저장</button>
+        </div>
+        <ul id="outfit-saved" class="list"></ul>
+      </div>
+
       <div class="card">
-        <h2>잘 맞는 내 옷</h2>
-        <p class="hint">갖고 있는 옷을 바닥에 펼쳐 놓고 재 주세요. 재는 법은 맨 아래에 있어요.</p>
+        <h2>내 옷장</h2>
+        <p class="hint">갖고 있는 옷을 바닥에 펼쳐 놓고 재 주세요. 재는 법은 맨 아래에 있어요. 옷 사진을 넣으면 코디 미리보기에서 그 옷 그대로 입혀 봐요(사진은 이 기기에만 저장돼요).</p>
         <ul id="closet-list" class="list"></ul>
         <button type="button" class="primary block" id="add-item">+ 내 옷 추가</button>
       </div>
@@ -158,6 +193,13 @@
           </label>
         </div>
         <div class="grid3" id="p-measures"></div>
+        <div class="item-photo">
+          <img id="p-photo-preview" class="thumb big hidden" alt="옷 사진">
+          <label class="ghost file-btn block-btn">옷 사진 넣기(선택)
+            <input type="file" id="p-photo" accept="image/*" hidden>
+          </label>
+          <p class="hint">바닥에 펼친 사진, 옷걸이 사진, 쇼핑몰 상품 사진 모두 괜찮아요. 이 기기에만 저장되고 서버로 보내지 않아요.</p>
+        </div>
         <div class="row2">
           <label class="field">신축성
             <select id="p-stretch">
@@ -280,7 +322,7 @@
 
   <nav class="bottom-nav">
     <button type="button" data-tab="compare" class="active">핏 비교</button>
-    <button type="button" data-tab="closet">내 옷</button>
+    <button type="button" data-tab="closet">옷장</button>
     <button type="button" data-tab="body">내 체형</button>
   </nav>
 
@@ -304,6 +346,7 @@
   <script src="app.js"></script>
   <script src="tryon.js"></script>
   <script src="models.js"></script>
+  <script src="wardrobe.js"></script>
   <script src="garmentsource.js"></script>
   <script src="color.js"></script>
   <script src="colorui.js"></script>

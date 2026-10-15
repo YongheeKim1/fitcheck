@@ -172,15 +172,22 @@ async function segmentScene(canvas) {
   };
   // 피부 평균색(손·팔·얼굴): 원래 옷이 살짝 삐져나온 곳을 덮을 때 쓴다
   let sr = 0, sgc = 0, sbc = 0, sn = 0;
+  const handPx = []; let hn = 0; // 손·팔 피부만(얼굴은 화장·조명이 달라 팔 색으로 쓰기엔 덜 맞는다)
   for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) {
     const c = cat[Math.floor((y * h) / H) * w + Math.floor((x * w) / W)];
     if (c !== 2 && c !== 3) continue;
     const i = (y * W + x) * 4;
     sr += src.data[i]; sgc += src.data[i + 1]; sbc += src.data[i + 2]; sn++;
+    // 분할 경계에 섞인 배경 픽셀은 빼고 피부다운 색만(붉은 기가 가장 강한 색)
+    if (c === 2) {
+      const R = src.data[i], G = src.data[i + 1], B = src.data[i + 2];
+      if (R > 60 && R > G && R > B && R - Math.min(G, B) > 12) { handPx.push(R, G, B); hn++; }
+    }
   }
   return {
     cat, w, h,
     skinColor: sn > 50 ? [sr / sn, sgc / sn, sbc / sn] : null,
+    handColor: hn > 50 ? [0, 1, 2].map((k) => { const v = []; for (let j = k; j < handPx.length; j += 3) v.push(handPx[j]); v.sort((a, b) => a - b); return v[v.length >> 1]; }) : null,
     head: layer((c) => c === 1 || c === 3), // 머리카락·얼굴
     skin: layer((c) => c === 2),            // 몸 피부(손·팔)
     others: layer((c) => c === 5),          // 소품(손에 든 휴대폰·가방 등): 손 근처만 옷 위로
@@ -409,20 +416,24 @@ $('#tryon-photo').addEventListener('change', async (e) => {
 
 // ---------- 기준 사진: 좋은 정면 사진 한 장을 이 기기(IndexedDB)에만 저장해 두고 매번 그 사진에 입힌다 ----------
 // 서버 동기화 대상이 아니다(사진은 기기 밖으로 나가지 않는다)
+// 저장소 칸: photos(기준 사진), garments(옷장 옷 사진, 옷 id별)
 const RefStore = {
   open() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('fitcheck-local', 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('photos');
+      const req = indexedDB.open('fitcheck-local', 2);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        for (const name of ['photos', 'garments']) if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
+      };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
   },
-  async run(mode, fn) {
+  async run(mode, fn, store = 'photos') {
     const db = await this.open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction('photos', mode);
-      const req = fn(tx.objectStore('photos'));
+      const tx = db.transaction(store, mode);
+      const req = fn(tx.objectStore(store));
       tx.oncomplete = () => { db.close(); resolve(req.result); };
       tx.onerror = () => { db.close(); reject(tx.error); };
     });
@@ -430,26 +441,38 @@ const RefStore = {
   get() { return this.run('readonly', (st) => st.get('ref')); },
   put(blob) { return this.run('readwrite', (st) => st.put(blob, 'ref')); },
   clear() { return this.run('readwrite', (st) => st.delete('ref')); },
+  // 옷장 옷 사진(이 기기에만. 서버에는 치수 숫자만 동기화된다)
+  getGarment(id) { return this.run('readonly', (st) => st.get(id), 'garments'); },
+  putGarment(id, blob) { return this.run('readwrite', (st) => st.put(blob, id), 'garments'); },
+  deleteGarment(id) { return this.run('readwrite', (st) => st.delete(id), 'garments'); },
 };
 
-async function loadRefPhoto() {
-  if (!('indexedDB' in window) || !state.body.height) return;
+// 기준 사진 불러오기(핏 비교·옷장 코디가 함께 쓴다. 동시에 불려도 한 번만 분석)
+function loadRefPhoto() {
+  if (tryon.refPromise) return tryon.refPromise;
+  if (!('indexedDB' in window) || !state.body.height) return Promise.resolve(null);
   tryon.refLoading = true;
-  try {
-    const blob = await RefStore.get();
-    tryon.refChecked = true;
-    tryon.refSaved = !!blob;
-    if (!blob) return;
-    const photo = await analyzeTryonPhoto(blob);
-    tryon.refPhoto = photo;
-    if (!tryon.photoUploaded) { tryon.photo = photo; renderTryonPhoto(); }
-  } catch (err) {
-    console.error(err);
-  } finally {
-    tryon.refLoading = false;
-    updateRefUI();
-    if (!tryon.photo) tryonStatus('전신 사진을 고르거나 카메라로 볼 수 있어요.');
-  }
+  tryon.refPromise = (async () => {
+    try {
+      const blob = await RefStore.get();
+      tryon.refChecked = true;
+      tryon.refSaved = !!blob;
+      if (!blob) return null;
+      const photo = await analyzeTryonPhoto(blob);
+      tryon.refPhoto = photo;
+      if (!tryon.photoUploaded && lastResults) { tryon.photo = photo; renderTryonPhoto(); }
+      return photo;
+    } catch (err) {
+      console.error(err);
+      tryon.refPromise = null; // 다음에 다시 시도
+      return null;
+    } finally {
+      tryon.refLoading = false;
+      updateRefUI();
+      if (lastResults && !tryon.photo) tryonStatus('전신 사진을 고르거나 카메라로 볼 수 있어요.');
+    }
+  })();
+  return tryon.refPromise;
 }
 
 function updateRefUI() {
@@ -476,6 +499,7 @@ $('#ref-save').addEventListener('click', async () => {
     const blob = await new Promise((r) => p.canvas.toBlob(r, 'image/jpeg', 0.92));
     await RefStore.put(blob);
     tryon.refPhoto = p;
+    tryon.refPromise = Promise.resolve(p);
     tryon.refSaved = true;
     tryonStatus('기준 사진으로 저장했어요. 이 기기에만 저장되고 서버로 보내지 않아요.', 'ok');
   } catch (err) {
@@ -490,6 +514,7 @@ $('#ref-clear').addEventListener('click', async () => {
   if (tryon.photo === tryon.refPhoto && !tryon.photoUploaded) tryon.photo = lastPhoto || null;
   tryon.refPhoto = null;
   tryon.refSaved = false;
+  tryon.refPromise = null;
   if (tryon.photo) renderTryonPhoto();
   else { $('#tryon-view').replaceChildren(); $('#tryon-notes').innerHTML = ''; }
   tryonStatus('기준 사진을 지웠어요.');

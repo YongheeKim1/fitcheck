@@ -162,7 +162,8 @@ function renderCloset() {
     const m = partsOf(p.category).filter((pt) => p[pt.key] != null).map((pt) => `${pt.label} ${fmt(p[pt.key])}`).join(' · ');
     return `
       <li>
-        <div>
+        <img class="thumb hidden" data-thumb="${p.id}" alt="">
+        <div class="grow">
           <div><span class="tag">${CATEGORY_LABEL[p.category]}</span> <b>${esc(p.name)}</b> ${p.size ? `<span class="meta">(${esc(p.size)})</span>` : ''}</div>
           <div class="meta">${FEEL_LABEL[p.feel]} · ${STRETCH_LABEL[p.stretch]}</div>
           <div class="meta">${m || '실측 없음'}</div>
@@ -173,6 +174,7 @@ function renderCloset() {
         </div>
       </li>`;
   }).join('');
+  if (typeof onClosetRendered === 'function') onClosetRendered(); // wardrobe.js: 사진·코디 고르기 갱신
 }
 
 $('#closet-list').addEventListener('click', (e) => {
@@ -185,6 +187,7 @@ $('#closet-list').addEventListener('click', (e) => {
       state.closet = state.closet.filter((x) => x.id !== delId);
       state.tombstones = [...(state.tombstones || []).filter((t) => t.id !== delId), { id: delId, updatedAt: Date.now() }];
       saveState();
+      if (typeof onClosetItemDeleted === 'function') onClosetItemDeleted(delId); // 기기에 저장된 옷 사진도 지운다
       renderCloset();
     }
   }
@@ -224,6 +227,7 @@ function openItemForm(p) {
   $('#item-import').open = !p;
   $('#item-size-picks').innerHTML = '';
   setItemImportStatus('');
+  if (typeof onItemFormOpened === 'function') onItemFormOpened(p); // wardrobe.js: 옷 사진 칸
   form.classList.remove('hidden');
   form.scrollIntoView({ behavior: 'smooth' });
 }
@@ -253,6 +257,7 @@ $('#item-form').addEventListener('submit', (e) => {
   else state.closet.push(item);
   saveState();
   form.classList.add('hidden');
+  if (typeof onClosetItemSaved === 'function') onClosetItemSaved(item); // wardrobe.js: 고른 옷 사진 저장
   renderCloset();
 });
 

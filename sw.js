@@ -1,6 +1,6 @@
 // 앱 파일을 캐시해 오프라인에서도 열리게 한다.
 // 파일을 수정했으면 CACHE 버전을 올려야 사용자 기기에 새 버전이 반영된다.
-const CACHE = 'fitcheck-v18';
+const CACHE = 'fitcheck-v20';
 const ASSETS = [
   './',
   'index.html',
@@ -10,6 +10,7 @@ const ASSETS = [
   'garment.js',
   'tryon.js',
   'models.js',
+  'wardrobe.js',
   'garmentsource.js',
   'color.js',
   'colorui.js',

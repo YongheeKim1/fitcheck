@@ -205,6 +205,12 @@ button.block { width: 100%; }
 .import-status.ok { color: var(--ok); }
 .import-status.err { color: var(--bad); }
 .import-status.warn { color: var(--warn); }
+.thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; flex: none; background: var(--line, #eee); }
+.thumb.big { width: 96px; height: 96px; display: block; margin-bottom: 6px; }
+.list li .grow { flex: 1; min-width: 0; }
+.item-photo { margin: 8px 0; }
+.outfit-save { align-items: end; margin-top: 10px; }
+#outfit-view canvas { width: 100%; height: auto; border-radius: 12px; margin-top: 8px; display: block; }
 .ref-photo { margin-top: 8px; }
 .progress { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 8px; }
 .progress > div { height: 100%; background: var(--primary); width: 0; transition: width .2s; }

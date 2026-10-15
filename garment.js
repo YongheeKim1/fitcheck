@@ -968,7 +968,9 @@
       const i = (y * W + x) * 4;
       return Math.hypot(src[i] - origC[0], src[i + 1] - origC[1], src[i + 2] - origC[2]) < 70;
     };
+    let armHole = null; // 드러난 팔 밖에 남은 원래 소매(아래 상의 팔 처리에서 채운다)
     const hole = (x, y) => {
+      if (armHole && armHole[y * W + x]) return true;
       if (y < z0 || y > z1) return false;
       const k = (y * W + x) * 4 + 3;
       if (gA[k] > 25) return false;
@@ -1017,6 +1019,57 @@
       }
       if (any) ctx.putImageData(img, 0, 0);
     }
+    // 상의: 새 옷이 반팔인데 원래 옷이 긴소매면 드러난 팔에 원래 소매가 남는다 → 피부로.
+    // 팔은 원통이라 가운데가 밝고 가장자리가 어둡게, 원래 소매의 큰 명암(빛 방향)도 조금 살린다
+    const skinC = scene.handColor || scene.skinColor;
+    if (geo.armSkin && skinC) {
+      // 선분까지 거리와 선분 위 위치(0~1)
+      const segD = (x, y, a, b) => {
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        return [Math.hypot(x - a.x - dx * t, y - a.y - dy * t), t];
+      };
+      let ax0 = W, ay0 = H, ax1 = 0, ay1 = 0;
+      for (const sg of geo.armSkin) {
+        ax0 = Math.min(ax0, sg.a.x - sg.R, sg.b.x - sg.R); ax1 = Math.max(ax1, sg.a.x + sg.R, sg.b.x + sg.R);
+        ay0 = Math.min(ay0, sg.a.y - sg.R, sg.b.y - sg.R); ay1 = Math.max(ay1, sg.a.y + sg.R, sg.b.y + sg.R);
+      }
+      ax0 = Math.max(0, Math.floor(ax0)); ay0 = Math.max(0, Math.floor(ay0)); ax1 = Math.min(W - 1, Math.ceil(ax1)); ay1 = Math.min(H - 1, Math.ceil(ay1));
+      const img = ctx.getImageData(0, 0, W, H);
+      const d = img.data;
+      const pix = [];
+      let lum = 0;
+      for (let y = ay0; y <= ay1; y++) for (let x = ax0; x <= ax1; x++) {
+        const i = y * W + x;
+        if (gA[i * 4 + 3] > 25 || catAt(x, y) !== 4) continue; // 새 옷 밑이거나 원래 옷이 아니면 그대로
+        let best = Infinity, ring = false;
+        for (const sg of geo.armSkin) {
+          const [dist, t] = segD(x, y, sg.a, sg.b);
+          const r = sg.ra + (sg.rb - sg.ra) * t;
+          if (dist / r < best) best = dist / r;
+          if (dist <= sg.R) ring = true;
+        }
+        if (best > 1) {
+          // 팔 밖에 남은 원래 소매(헐렁한 소매 등): 배경으로 메운다
+          if (ring) { (armHole || (armHole = new Uint8Array(W * H)))[i] = 1; }
+          continue;
+        }
+        pix.push(i, best);
+        lum += d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2];
+      }
+      if (pix.length > 40) {
+        lum /= pix.length / 2;
+        const [r, g2, b] = skinC;
+        for (let k = 0; k < pix.length; k += 2) {
+          const i = pix[k], t = pix[k + 1];
+          const cyl = 0.62 + 0.45 * Math.sqrt(Math.max(0, 1 - t * t));                      // 원통 명암(가장자리로 갈수록 어둡게)
+          const orig = Math.min(1.12, Math.max(0.85, (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / (lum || 1))); // 원래 명암 약간
+          const f = cyl * (0.75 + 0.25 * orig);
+          d[i * 4] = Math.min(255, r * f); d[i * 4 + 1] = Math.min(255, g2 * f); d[i * 4 + 2] = Math.min(255, b * f);
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+    }
     // 새 바지가 원래 바지보다 짧으면 밑단 아래로 원래 바지가 보인다 → 발목 살색으로(원래 바지의 명암은 살린다)
     if (geo.ankles && scene.skinColor) {
       const img = ctx.getImageData(0, 0, W, H);
@@ -1042,6 +1095,14 @@
         ctx.putImageData(img, 0, 0);
       }
     }
+    // 팔 밖에 남은 원래 소매도 메울 범위에 넣는다(범위 계산 뒤에 정해지므로 여기서 넓힌다)
+    if (armHole) {
+      for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) {
+        if (!armHole[y * W + x]) continue;
+        if (!box) box = { x0: x, y0: y, x1: x, y1: y };
+        else { box.x0 = Math.min(box.x0, x); box.y0 = Math.min(box.y0, y); box.x1 = Math.max(box.x1, x); box.y1 = Math.max(box.y1, y); }
+      }
+    }
     if (box) {
       const pad = Math.round(W / 30);
       box = { x0: Math.max(0, box.x0 - pad), y0: Math.max(0, box.y0 - pad), x1: Math.min(W - 1, box.x1 + pad), y1: Math.min(H - 1, box.y1 + pad) };
@@ -1060,7 +1121,7 @@
       }
       key = `${box.x0},${box.y0},${box.x1},${box.y1}:${key}`;
       lastHole = { mask: holeMask, box, key };
-      const ai = scene.aiPatch && scene.aiPatch.key === key ? scene.aiPatch : null;
+      const ai = scene.aiPatch && scene.aiPatch.key === key ? scene.aiPatch : (scene.aiPatches?.get(key) || null);
       if (ai) {
         // AI(MI-GAN, models.js)가 메운 조각에서 드러난 자리만 가져온다
         const pd = ai.canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, ai.canvas.width, ai.canvas.height).data;
@@ -1668,7 +1729,12 @@
     }
     if (guessed.length) notes.push(`사이즈표에 ${guessed.join('·')} 실측이 없어서 다른 치수로 추정해 그렸어요.`);
     const zoneTop = Math.min(HPS.y, seam(-1).y, seam(1).y) - 3 * s;
-    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: sleeves, zone: [zoneTop, Math.max(hemC.y, hipMid.y) + 4 * s] } };
+    // 팔 둘레(어깨~손목): 새 옷 밖으로 드러난 팔에 원래 옷 소매가 남아 있으면 피부로 바꾼다(composeScene)
+    const armSkin = [[11, 13, 15], [12, 14, 16]].map(([a, b, c]) => [
+      { a: lerpV(P(a), P(b), 0.12), b: P(b), ra: 4.6 * s, rb: 3.9 * s, R: 6.5 * s },
+      { a: P(b), b: P(c), ra: 3.8 * s, rb: 2.7 * s, R: 5.5 * s },
+    ]).flat();
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: sleeves, armSkin, zone: [zoneTop, Math.max(hemC.y, hipMid.y) + 4 * s] } };
   }
 
   function draw(ctx, opts) {
