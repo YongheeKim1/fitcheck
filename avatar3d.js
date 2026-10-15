@@ -301,7 +301,7 @@ const Avatar3D = (() => {
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.15, 'eye-bag': -0.4, 'eye-scale': 0.05,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.8, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0 };
+  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.8, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35 };
   const HAND_CURL = { palmSign: -1, seg: [10, 25, 12], more: 2, close: 3, thumb: [0, 10, 10], thumbIn: -60 };
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
@@ -404,6 +404,27 @@ const Avatar3D = (() => {
     return out;
   }
 
+  // 피부 모공 무늬(범프): 잔 점 노이즈를 작은 타일로(몸 전체 UV에 여러 번 반복)
+  let poreT = null;
+  function poreTex() {
+    if (poreT) return poreT;
+    const N = 256, c = document.createElement('canvas'); c.width = c.height = N;
+    const g = c.getContext('2d'), im = g.createImageData(N, N);
+    let seed = 11; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const v = new Float32Array(N * N);
+    for (let i = 0; i < v.length; i++) v[i] = rnd();
+    // 살짝 흐려 점이 아니라 작은 우묵한 자국으로
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      let s = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) s += v[((y + dy + N) % N) * N + ((x + dx + N) % N)];
+      const q = Math.round(128 + (s / 9 - 0.5) * 300);
+      const i = (y * N + x) * 4; im.data[i] = im.data[i + 1] = im.data[i + 2] = Math.max(0, Math.min(255, q)); im.data[i + 3] = 255;
+    }
+    g.putImageData(im, 0, 0);
+    poreT = new THREE.CanvasTexture(c);
+    poreT.wrapS = poreT.wrapT = THREE.RepeatWrapping; poreT.repeat.set(24, 24);
+    return poreT;
+  }
+
   // 머리카락 가닥 무늬(알파): 가는 세로 획을 무작위로 겹쳐 그린 캔버스(한 번만 만든다)
   let strandT = null;
   function strandTex() {
@@ -497,6 +518,7 @@ const Avatar3D = (() => {
     const skinMat = new THREE.MeshPhysicalMaterial({
       map: skinT, color: new THREE.Color(tint[0], tint[1], tint[2]).convertSRGBToLinear(),
       roughness: 0.58, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.9, 0.45, 0.38), clearcoat: 0.05, clearcoatRoughness: 0.6,
+      ...(POSE.pores ? { bumpMap: poreTex(), bumpScale: POSE.pores } : {}), // 모공 결: 매끈한 플라스틱 피부 대신 빛이 잘게 흩어지게
     });
     const body = new THREE.Mesh(geom(data.body.ref, data.body.uv, data.body.tris, P, N), skinMat);
     body.castShadow = body.receiveShadow = true;

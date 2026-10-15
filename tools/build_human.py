@@ -353,6 +353,12 @@ def even_skin(src, dst):
     k = np.asarray(Image.fromarray((k * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(8))).astype(np.float32) / 255
     ratio = a / low
     out = target * (1 + (ratio - 1) * k[..., None])
+    # 얼굴 안의 자연스러운 혈색 차이(볼·코끝·귀가 살짝 붉고 이마가 밝은 것)는 조금 되살린다: 얼굴 평균에 대한 비율만(얼굴 전체 톤은 몸과 같게)
+    head = (xx > 1300) & (yy < 1760) & (m > 0)
+    hm = low[head].mean(0)
+    vary = np.clip(low / hm, 0.75, 1.3)
+    hmask = np.asarray(Image.fromarray((head * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(20))).astype(np.float32)[..., None] / 255
+    out = out * (1 + (vary - 1) * 0.4 * hmask)
     # 입술은 원래 색 비율이 커서 저주파도 살짝 붉게 남긴다
     lip = ell(1866, 1060, 40, 52)[..., None]
     out = out * (1 - lip * 0.5) + (a * target / np.median(low[1000:1120, 1700:1800].reshape(-1, 3), axis=0)) * lip * 0.5
