@@ -310,8 +310,8 @@ const Avatar3D = (() => {
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.15, 'eye-bag': -0.4, 'eye-scale': 0.05,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -15, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35 };
-  const HAND_CURL = { palmSign: -1, seg: [8, 18, 10], more: 1.5, close: 3, thumb: [0, 8, 8], thumbIn: -55, scale: 0.95 };
+  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35 };
+  const HAND_CURL = { palmSign: -1, seg: [7, 16, 10], more: 0.8, close: 1, thumb: [0, 8, 8], thumbIn: -55, scale: 0.95 };
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
   function normals(P) {
@@ -590,6 +590,15 @@ const Avatar3D = (() => {
           for (const i of ids) { const b = bin(PP[i]); const cy = sum[b] / Math.max(1, cnt[b]); PP[i + 1] = cy + (PP[i + 1] - cy) * POSE.browThick; }
         }
       }
+      if (p.kind === 'shoes') {
+        // 양말 윗단: 뒤쪽이 솟은 톱니(노치)를 한 높이로 고르게(발마다 윗단 높이에서 0.8cm 아래로 자른다)
+        for (const sd of [1, -1]) {
+          let top = -Infinity;
+          for (let i = 0; i < PP.length; i += 3) if (PP[i] * sd > 0) top = Math.max(top, PP[i + 1]);
+          const cut = top - 0.8;
+          for (let i = 0; i < PP.length; i += 3) if (PP[i] * sd > 0 && PP[i + 1] > cut) PP[i + 1] = cut + (PP[i + 1] - cut) * 0.15;
+        }
+      }
       let tris = p.tris;
       if (p.kind === 'lash') {
         // 아래 속눈썹은 빼기: 낮은 눈꺼풀 아래로 흰자 사이에 가시처럼 늘어져 보인다
@@ -612,7 +621,7 @@ const Avatar3D = (() => {
       } else if (p.kind === 'eye') {
         mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.8, transparent: true, alphaTest: 0.02 }); // 소프트박스가 눈에 비친 반짝임
       } else {
-        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], roughness: 0.7 });
+        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], roughness: 0.7, emissive: new THREE.Color(0.05, 0.05, 0.05) }); // 신발 밑면이 새까만 띠로 보이지 않게
       }
       const mesh = new THREE.Mesh(g, mat);
       mesh.castShadow = p.kind === 'hair' || p.kind === 'shoes';

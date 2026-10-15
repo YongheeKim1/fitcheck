@@ -1736,6 +1736,7 @@
 
     // 소매: 팔(어깨 봉제선 → 팔꿈치 → 손목 → 손끝)을 따라가는 관. 몸판 위에 그린다(팔이 몸 옆에 있으므로)
     const cuffs = [];
+    const sleeveEnds = []; // 아바타: 소매 끝 각도·겨드랑이 메우기용
     const sleeves = [];
     const sleeveTargets = [];
     const folds = [];
@@ -1814,6 +1815,7 @@
             folds.push({ pts: across(mid(outer[j], inner[j]), nrm, w, -0.45, 0.1, 0.12), ...soft, a: 0.12 + bend * 0.35, hl: mul(pts[j].dir, s * 0.8) });
           }
         }
+        sleeveEnds.push({ o: outer[outer.length - 1], i: inner[inner.length - 1], i0: inner[0], innerEdge: inner.slice(), dir: pts[pts.length - 1].dir, ap, side, waistSide: add(waistAt, mul(n, (side * ww) / 2)) });
         const ck = outer.length - 2; // 끝에서 한 칸 안쪽(약 3~4cm)
         cuffs.push([outer[ck], inner[ck]]);
         const armOdd = (o.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross' || k === 'face');
@@ -2001,7 +2003,7 @@
       { a: lerpV(P(a), P(b), 0.12), b: P(b), ra: 4.6 * s, rb: 3.9 * s, R: 6.5 * s },
       { a: P(b), b: P(c), ra: 3.8 * s, rb: 2.7 * s, R: 5.5 * s },
     ]).flat();
-    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: sleeves, armSkin, zone: [zoneTop, Math.max(hemC.y, hipMid.y) + 4 * s], shoulderClip: { y: armpitAt.y, r: (1.5 + drop * 0.6) * s, band: 4 * s }, neckHole: neck, s } };
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: sleeves, armSkin, zone: [zoneTop, Math.max(hemC.y, hipMid.y) + 4 * s], shoulderClip: { y: armpitAt.y, r: (1.5 + drop * 0.6) * s, band: 4 * s }, neckHole: neck, sleeveEnds: g.sleeve != null && g.sleeve < 40 ? sleeveEnds : [], s } };
   }
 
   // 아바타 옷 다듬기(3D 몸 실루엣을 알 때만). 상의는 1)·2)도:
@@ -2013,8 +2015,66 @@
     // 0) 반투명하게 번진 가장자리(상품 사진 오리기 경계)를 또렷하게: 소매·밑단이 두 겹으로 비치지 않게
     {
       const im = gg.getImageData(0, 0, W, H), d = im.data;
-      for (let i = 3; i < d.length; i += 4) { const a = d[i]; if (a && a < 255) { const t = Math.min(1, Math.max(0, (a - 70) / 110)); d[i] = Math.round(255 * t * t * (3 - 2 * t)); } }
+      const n = W * H, A = new Float32Array(n);
+      for (let i = 0; i < n; i++) A[i] = d[i * 4 + 3] / 255;
+      // 닫기(1px 넓혔다 줄이기): 가장자리의 작은 틈·톱니를 메운다
+      const mm = (src, fn) => {
+        const o = new Float32Array(n);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+          const i = y * W + x; let v = src[i];
+          if (x > 0) v = fn(v, src[i - 1]); if (x < W - 1) v = fn(v, src[i + 1]);
+          if (y > 0) v = fn(v, src[i - W]); if (y < H - 1) v = fn(v, src[i + W]);
+          o[i] = v;
+        }
+        return o;
+      };
+      let B = mm(mm(A, Math.max), Math.min);
+      // 매끈한 윤곽: 3x3 평균 두 번(σ≈1px) → 0.5 문턱 근처만 부드럽게(반투명 띠 없이 1px 정도 경계)
+      const box = (src) => { const o = new Float32Array(n); for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x; o[i] = (src[i - W - 1] + src[i - W] + src[i - W + 1] + src[i - 1] + src[i] + src[i + 1] + src[i + W - 1] + src[i + W] + src[i + W + 1]) / 9; } return o; };
+      B = box(box(B));
+      for (let i = 0; i < n; i++) {
+        const t = Math.min(1, Math.max(0, (B[i] - 0.3) / 0.4));
+        const a2 = t * t * (3 - 2 * t);
+        if (a2 > 0 && d[i * 4 + 3] === 0) {
+          // 새로 생긴 가장자리 픽셀: 옆 픽셀 색을 빌린다
+          const j = [i - 1, i + 1, i - W, i + W].find((q) => q >= 0 && q < n && d[q * 4 + 3] > 0);
+          if (j != null) { d[i * 4] = d[j * 4]; d[i * 4 + 1] = d[j * 4 + 1]; d[i * 4 + 2] = d[j * 4 + 2]; }
+        }
+        d[i * 4 + 3] = Math.round(255 * a2);
+      }
+      // 가장자리 3px 안의 배경색(밝고 무채색) 픽셀은 안쪽 천 색으로: 소매 바깥 흰 띠·소매 끝 흰 점
+      const inner = mm(mm(mm(B.map((v) => (v > 0.5 ? 1 : 0)), Math.min), Math.min), Math.min);
+      const isBg = (i) => { const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2]; return Math.min(r, g, b) > 185 && Math.max(r, g, b) - Math.min(r, g, b) < 22; };
+      for (let pass = 0; pass < 3; pass++) {
+        for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+          const i = y * W + x;
+          if (!d[i * 4 + 3] || inner[i] || !isBg(i)) continue;
+          let r = 0, g = 0, b = 0, c = 0;
+          for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+            const q = i + dy * W + dx; if (q < 0 || q >= n || !d[q * 4 + 3] || isBg(q)) continue;
+            r += d[q * 4]; g += d[q * 4 + 1]; b += d[q * 4 + 2]; c++;
+          }
+          if (c) { d[i * 4] = r / c; d[i * 4 + 1] = g / c; d[i * 4 + 2] = b / c; }
+        }
+      }
       gg.putImageData(im, 0, 0);
+    }
+    // 반팔: 소매 끝 안쪽 어두운 테 + 바로 아래 팔에 그늘
+    for (const e of geo.sleeveEnds || []) {
+      const s = geo.s || W / 200;
+      const up = mul(e.dir, -1);
+      const iR = e.i;
+      // 안쪽 테
+      gg.save(); gg.globalCompositeOperation = 'source-atop';
+      gg.strokeStyle = 'rgba(0,0,0,0.35)'; gg.lineWidth = 1.2 * s; gg.filter = `blur(${0.4 * s}px)`;
+      gg.beginPath(); gg.moveTo(e.o.x, e.o.y); gg.lineTo(iR.x, iR.y); gg.stroke(); gg.restore();
+      // 팔 위 그늘(몸 위에만, 옷 뒤로)
+      const sh = buf('sleeveShadow', W, H), shg = sh.getContext('2d');
+      shg.setTransform(1, 0, 0, 1, 0, 0); shg.globalCompositeOperation = 'source-over'; shg.clearRect(0, 0, W, H);
+      shg.filter = `blur(${0.8 * s}px)`; shg.strokeStyle = 'rgba(40,25,20,0.3)'; shg.lineWidth = 1.6 * s;
+      shg.beginPath(); shg.moveTo(e.o.x + e.dir.x * s, e.o.y + e.dir.y * s); shg.lineTo(iR.x + e.dir.x * s, iR.y + e.dir.y * s); shg.stroke();
+      shg.filter = 'none'; shg.globalCompositeOperation = 'destination-in'; shg.drawImage(avatarBody, 0, 0, W, H);
+      gg.save(); gg.globalCompositeOperation = 'destination-over'; gg.drawImage(sh, 0, 0); gg.restore();
     }
     const c = geo.shoulderClip;
     if (c) {
@@ -2052,9 +2112,9 @@
       gg.strokeStyle = 'rgba(0,0,0,0.28)';
       gg.lineWidth = 1.6 * s;
       gg.filter = `blur(${s * 0.5}px)`;
-      gg.beginPath(); nk.forEach((p, i) => (i ? gg.lineTo(p.x, p.y) : gg.moveTo(p.x, p.y))); gg.stroke();
-      gg.restore();
-    }
+      gg.beginPath(); nk.forEach((p, i) => (i ? gg.lineTo(p.x, p.y) : gg.moveTo(p.x, p.y))); gg.stroke();
+      gg.restore();
+    }
     // 3) 바지 허리·엉덩이: 엉덩이 실루엣(몸 + 여유)을 넘는 각진 모서리는 잘라 골반을 감싸게,
     //    허리 윗선은 앞 가운데가 살짝 내려간 곡선(몸통을 두르는 띠를 약간 위에서 본 모양) + 위쪽 살에 닿는 그늘
     const hc = geo.hipClip;

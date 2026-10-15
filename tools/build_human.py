@@ -364,7 +364,14 @@ def even_skin(src, dst):
     # 입술은 원래 색 비율이 커서 저주파도 살짝 붉게 남긴다
     lip = ell(1866, 1060, 40, 52)[..., None]
     out = out * (1 - lip * 0.5) + (a * target / np.median(low[1000:1120, 1700:1800].reshape(-1, 3), axis=0)) * lip * 0.5
-    out = out * (1 + lip * np.array([0.06, -0.03, -0.02], np.float32))  # 입술 혈색 조금 더
+    # 입술: 주황빛 대신 차분한 장밋빛(#c98a80 쪽), 입술 사이 어두운 틈은 입술색으로 올린다
+    rose = np.array([201, 138, 128], np.float32)
+    lum_o = out.mean(-1, keepdims=True)
+    lipc = rose * np.clip(lum_o / 150, 0.75, 1.15)
+    out = out * (1 - lip * 0.55) + lipc * lip * 0.55
+    # 입술 사이 틈이 검게 벌어져 보이지 않게: 입술 안 어두운 곳을 입술색의 70%까지 올린다
+    floor_ = rose * 0.62
+    out = out * (1 - lip) + np.maximum(out, floor_) * lip
     Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), quality=88, optimize=True)
 
 def dark_iris(src, dst, size):
@@ -428,8 +435,13 @@ def clean_shoes(src, dst, size):
     a = np.asarray(im).astype(np.float32)
     r, g, b = a[..., 0], a[..., 1], a[..., 2]
     # 색은 모두 빼고(초록 포인트 없음), 어두운 판·밑창·때를 밝은 회색으로 올려 깨끗한 흰 운동화로
-    lum = (r * 0.3 + g * 0.45 + b * 0.25)[..., None]
-    a = np.repeat(np.clip(118 + lum * 0.56, 0, 255), 3, -1) * np.array([1.0, 0.995, 0.985])
+    from PIL import ImageFilter
+    lum = (r * 0.3 + g * 0.45 + b * 0.25)
+    blurL = np.asarray(Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(10 * size / 1024))).astype(np.float32) + 8
+    detail = np.clip(lum / blurL, 0.4, 1.6)                       # 끈·구멍·패널 결
+    base = np.clip(125 + blurL * 0.4, 0, 215)                     # 큰 밝기: 흰 갑피(조명에서 날아가지 않게 약간 낮게), 어두운 판·밑창은 중간 회색
+    l2 = np.clip(base * (0.72 + 0.35 * detail), 0, 245)
+    a = np.repeat(l2[..., None], 3, -1) * np.array([1.0, 0.993, 0.98])
     f = size / 512
     y0, x0 = int(430 * f), int(388 * f)
     sock = a[y0:, x0:]
