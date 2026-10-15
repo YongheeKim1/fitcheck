@@ -797,6 +797,10 @@ const Avatar3D = (() => {
     const c = canvas.getContext('2d');
     const bg = c.createLinearGradient(0, 0, 0, CH); bg.addColorStop(0, '#f2f0ed'); bg.addColorStop(1, '#dedad4');
     c.fillStyle = bg; c.fillRect(0, 0, CW, CH);
+    // 스튜디오 조명처럼 사람 뒤가 밝고 가장자리로 갈수록 아주 조금 어둡게(인물이 배경에서 떠 보이게)
+    const vg = c.createRadialGradient(CW / 2, CH * 0.42, CH * 0.12, CW / 2, CH * 0.42, CH * 0.75);
+    vg.addColorStop(0, 'rgba(255,255,255,0.10)'); vg.addColorStop(1, 'rgba(60,50,40,0.10)');
+    c.fillStyle = vg; c.fillRect(0, 0, CW, CH);
     const cx = CW / 2, fy = FLOOR + 2, rr = 24 * s;
     const fl = c.createRadialGradient(cx, fy, 0, cx, fy, rr);
     fl.addColorStop(0, 'rgba(0,0,0,0.28)'); fl.addColorStop(1, 'rgba(0,0,0,0)');
