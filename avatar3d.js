@@ -306,8 +306,8 @@ const Avatar3D = (() => {
   const FACE = {
     'lowerlip-vol': -0.7, 'lowerlip-h': -0.3, 'lowerlip-mid': 0.8, 'upperlip-mid': -0.6, 'mouth-angle': 0.3, 'mouth-w': -0.1,
     'chin-prom': 0.25, 'chin-w': -0.45, 'head-fat': -0.5, 'head-oval': 0,
-    'cheek-vol': -0.25, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
-    'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.15, 'eye-bag': -0.4, 'eye-scale': 0.05,
+    'cheek-vol': -0.5, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
+    'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
   const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35 };
@@ -405,7 +405,7 @@ const Avatar3D = (() => {
         for (let i = 0; i < n; i++) {
           const d = (S[i * 3] - P[i * 3]) * N[i * 3] + (S[i * 3 + 1] - P[i * 3 + 1]) * N[i * 3 + 1] + (S[i * 3 + 2] - P[i * 3 + 2]) * N[i * 3 + 2];
           // 큰 굴곡은 얼굴(눈두덩·콧방울·입꼬리)에만 진하게: 몸통에 쓰면 가슴·쇄골에 멍처럼 얼룩진다
-          const wgt = it === 3 ? 0.15 + 0.3 * (hw[i] / 255) : 0.03 + 0.34 * (hw[i] / 255);
+          const wgt = it === 3 ? 0.15 + 0.4 * (hw[i] / 255) : 0.06 + 0.5 * (hw[i] / 255); // 몸통도 아주 약하게(쇄골·가슴 윤곽)
           out[i] += Math.max(0, Math.min(1, d / sc)) * wgt;
         }
       }
@@ -663,7 +663,7 @@ const Avatar3D = (() => {
     // 조명: 왼쪽 위 앞 주광(그림자) + 오른쪽 보조광 + 뒤 윤곽광 + 하늘/바닥 반사
     scene.add(new THREE.HemisphereLight(0xfff6ee, 0x6a5a52, 0.18));
     const key = new THREE.DirectionalLight(0xfff1e4, LIGHT.key);
-    key.position.set(-25, 240, 500); key.castShadow = true; // 거의 정면 위: 손·팔 그림자가 몸 뒤로 떨어지게
+    key.position.set(-110, 230, 480); key.castShadow = true; // 왼쪽 위 앞: 코 반대편·광대 아래에 부드러운 그늘
     key.shadow.mapSize.set(1024, 1024);
     Object.assign(key.shadow.camera, { left: -60, right: 60, top: 200, bottom: -10, near: 10, far: 900 });
     key.shadow.bias = -0.0004; key.shadow.normalBias = 0.6; key.shadow.radius = 18; key.shadow.blurSamples = 24;

@@ -2033,7 +2033,7 @@
       const box = (src) => { const o = new Float32Array(n); for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x; o[i] = (src[i - W - 1] + src[i - W] + src[i - W + 1] + src[i - 1] + src[i] + src[i + 1] + src[i + W - 1] + src[i + W] + src[i + W + 1]) / 9; } return o; };
       B = box(box(B));
       for (let i = 0; i < n; i++) {
-        const t = Math.min(1, Math.max(0, (B[i] - 0.3) / 0.4));
+        const t = Math.min(1, Math.max(0, (B[i] - 0.22) / 0.3)); // 안쪽 반투명(밑단 등)은 불투명으로, 경계는 1px 정도
         const a2 = t * t * (3 - 2 * t);
         if (a2 > 0 && d[i * 4 + 3] === 0) {
           // 새로 생긴 가장자리 픽셀: 옆 픽셀 색을 빌린다
@@ -2091,6 +2091,7 @@
       mg.fillStyle = gr; mg.fillRect(0, c.y - c.band, W, c.band);
       mg.fillStyle = '#000'; mg.fillRect(0, c.y, W, H - c.y);
       gg.save(); gg.globalCompositeOperation = 'destination-in'; gg.drawImage(m, 0, 0); gg.restore();
+      roundCorners(gg, W, Math.max(0, Math.round(c.y - 30 * (geo.s || W / 200))), Math.round(c.y + 2 * (geo.s || W / 200)), Math.round(1.5 * (geo.s || W / 200)));
     }
     const nk = geo.neckHole;
     if (nk && nk.length > 2) {
@@ -2156,6 +2157,40 @@
       shg.globalCompositeOperation = 'source-over';
       gg.save(); gg.globalCompositeOperation = 'destination-over'; gg.drawImage(sh, 0, 0); gg.restore();
     }
+  }
+
+  // 볼록한 모서리 둥글리기(열기: 줄였다 넓히기, 반지름 R, 팔각형 모양): 어깨 끝·소매 윗모서리의 직각을 약 R 반지름 곡선으로
+  function roundCorners(gg, W, y0, y1, R) {
+    const h = y1 - y0;
+    if (h < 4 || R < 1) return;
+    const im = gg.getImageData(0, y0, W, h), d = im.data, n = W * h;
+    const A = new Uint8Array(n);
+    for (let i = 0; i < n; i++) A[i] = d[i * 4 + 3] > 127 ? 1 : 0;
+    const N4 = [-1, 1, -W, W], N8 = [-1, 1, -W, W, -W - 1, -W + 1, W - 1, W + 1];
+    const step = (src, grow, k) => {
+      const o = new Uint8Array(n), nb = k % 2 ? N4 : N8;
+      for (let i = 0; i < n; i++) {
+        let v = src[i];
+        const x = i % W;
+        for (const dq of nb) {
+          const q = i + dq;
+          if (q < 0 || q >= n || Math.abs((q % W) - x) > 1) continue; // 상자 위아래 밖은 그대로 둔다
+          v = grow ? Math.max(v, src[q]) : Math.min(v, src[q]);
+        }
+        o[i] = v;
+      }
+      return o;
+    };
+    let B = A;
+    for (let k = 0; k < R; k++) B = step(B, false, k);
+    for (let k = 0; k < R; k++) B = step(B, true, k);
+    // 위·아래 가장자리 R줄은 상자 밖 정보가 없으니 건드리지 않는다
+    for (let i = 0; i < n; i++) {
+      const y = (i / W) | 0;
+      if (y < R || y >= h - R) continue;
+      if (A[i] && !B[i]) d[i * 4 + 3] = 0;
+    }
+    gg.putImageData(im, 0, y0);
   }
 
   // 아바타 옷 조명: 붙여 넣은 사진처럼 평평하지 않게
