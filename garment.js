@@ -207,6 +207,32 @@
     return b;
   }
 
+  // 옷 그림자: 사진은 그대로(옷 전체에 부드러운 그림자), 아바타는 몸 위에만(멀리 있는 배경 벽에 그림자가 번지면 얼룩처럼 보인다)
+  let avatarBody = null;
+  function dropShadowed(ctx, layer, W, H, alpha = 0.35) {
+    const blur = Math.max(6, W / 110), oy = Math.max(2, W / 420);
+    if (!avatarBody) {
+      ctx.save();
+      ctx.shadowColor = `rgba(0,0,0,${alpha})`; ctx.shadowBlur = blur; ctx.shadowOffsetY = oy;
+      ctx.drawImage(layer, 0, 0);
+      ctx.restore();
+      return;
+    }
+    const sh = buf('bodyShadow', W, H), sg = sh.getContext('2d');
+    sg.setTransform(1, 0, 0, 1, 0, 0);
+    sg.globalCompositeOperation = 'source-over';
+    sg.clearRect(0, 0, W, H);
+    sg.save();
+    sg.shadowColor = `rgba(0,0,0,${alpha})`; sg.shadowBlur = blur; sg.shadowOffsetY = oy; sg.shadowOffsetX = W * 2;
+    sg.drawImage(layer, -W * 2, 0); // 그림자만 남기기(옷은 화면 밖)
+    sg.restore();
+    sg.globalCompositeOperation = 'destination-in';
+    sg.drawImage(avatarBody, 0, 0, W, H);
+    sg.globalCompositeOperation = 'source-over';
+    ctx.drawImage(sh, 0, 0);
+    ctx.drawImage(layer, 0, 0);
+  }
+
   // polys를 color로 칠한다. from→to: 좌우 가장자리가 살짝 어두워지는 방향(몸통의 둥근 느낌)
   function fillShape(ctx, polys, color, from, to) {
     const canvasOk = canMakeCanvas && ctx.canvas && photo && typeof Path2D !== 'undefined';
@@ -250,12 +276,7 @@
     L.restore();
 
     // 그림자를 깔고 사진 위에 얹기
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = Math.max(6, W / 110);
-    ctx.shadowOffsetY = Math.max(2, W / 420);
-    ctx.drawImage(layer, 0, 0);
-    ctx.restore();
+    dropShadowed(ctx, layer, W, H);
     // 가는 외곽선
     ctx.save();
     ctx.lineJoin = 'round';
@@ -602,7 +623,7 @@
       gg.imageSmoothingEnabled = true;
       gg.imageSmoothingQuality = 'high';
       // 거친 단계부터: 큰 구멍(사진 속 팔과 몸통 사이 배경 틈 등)은 넓게 흐린 천 색, 작은 틈은 가까운 천 색
-      for (const k of [72, 32, 12]) { const b = blurred(k); for (let r = 0; r < 3; r++) gg.drawImage(b, 0, 0, W, H); }
+      for (const k of [72, 32, 12, 5, 2.5]) { const b = blurred(k); for (let r = 0; r < 3; r++) gg.drawImage(b, 0, 0, W, H); } // 마지막 두 단계: 가장자리 바로 옆은 또렷한 천 색(흐린 띠 얼룩 방지)
       // 메울 범위: 목표 띠 모양 안(하나로 휜 경우엔 잘라 낸 옷 모양과 같게 테두리를 조금 넓힌다)
       const fm = buf('gapMask', W, H);
       const fmg = fm.getContext('2d');
@@ -680,12 +701,7 @@
     L.globalAlpha = Math.min(0.32, (drawCategory === 'bottom' ? 0.1 : 0.18) * shadeK);
     L.drawImage(sh, 0, 0);
     L.restore();
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = Math.max(6, W / 110);
-    ctx.shadowOffsetY = Math.max(2, W / 420);
-    ctx.drawImage(layer, 0, 0);
-    ctx.restore();
+    dropShadowed(ctx, layer, W, H);
     return true;
   }
 
@@ -874,7 +890,7 @@
       wg.globalCompositeOperation = 'source-over';
       g.save();
       g.globalCompositeOperation = 'source-atop';
-      g.globalAlpha = 0.3;
+      g.globalAlpha = avatarBody ? 0.08 : 0.3; // 아바타는 배경이 밝은 단색이라 넓은 빛 번짐이 옷 가장자리에 회색 얼룩처럼 보인다
       g.drawImage(wrap, 0, 0);
       g.restore();
     }
@@ -1999,6 +2015,7 @@
     shadeK = opts.scene?.shadeK ?? 1;
     drawCategory = opts.category;
     avatarShade = null;
+    avatarBody = opts.scene?.isAvatar && canMakeCanvas ? opts.scene.skin : null; // 아바타 몸 실루엣(그림자를 몸 위에만)
     if (opts.scene?.isAvatar && canMakeCanvas) {
       avatarShade = opts.scene.depthShade || null;
       if (!avatarShade) { avatarShade = buf('flatShade', 4, 4); const fg = avatarShade.getContext('2d'); fg.fillStyle = '#808080'; fg.fillRect(0, 0, 4, 4); }
