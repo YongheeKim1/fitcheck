@@ -525,7 +525,8 @@
     return true;
   }
   let useTPS = true; // draw()에서 자세에 따라 정한다(팔을 크게 들면 띠 방식이 낫다)
-  let armsFront = false; // 팔이 몸 앞에 오는 자세(팔 듦·팔이 몸을 가림)
+  let armsFront = false;
+  let lastHole = null; // 마지막으로 그린 장면의 메울 곳(tryon.js가 AI로 다시 메울 때 쓴다) // 팔이 몸 앞에 오는 자세(팔 듦·팔이 몸을 가림)
 
   // pairs: [{ src: 원본 띠, dst: 목표 띠 }]. 실측 크기로 휜 옷 사진에 내 사진 명암을 살짝 입히고 그림자와 함께 얹는다
   function paintTexture(ctx, img, pairs, folds) {
@@ -888,6 +889,7 @@
 
   function composeScene(ctx, G, scene, geo) {
     const W = ctx.canvas.width, H = ctx.canvas.height;
+    lastHole = null;
     const gA = G.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
     const bodyC = buf('bodymask', W, H);
     const bg = bodyC.getContext('2d', { willReadFrequently: true });
@@ -1037,8 +1039,48 @@
       // 다리 아래쪽은 분할이 원래 바지를 배경으로 볼 때가 있어 색으로도 거른다
       const legY = (z0 + H) / 2;
       const under = (x, y) => gA[(y * W + x) * 4 + 3] > 25 && (catAt(x, y) === 4 || (origC && y > legY && nearOrig(x, y, 70)));
-      inpaint(img, W, (x, y) => hole(x, y) || under(x, y), box);
+      // 메울 곳 표시(드러난 자리 + 새 옷 밑의 원래 옷: 원래 옷 무늬가 메움 재료로 쓰이지 않게)와 그 지문
+      const holeMask = new Uint8Array(W * H);
+      let key = 0;
+      for (let y = box.y0; y <= box.y1; y++) for (let x = box.x0; x <= box.x1; x++) {
+        if (hole(x, y)) { holeMask[y * W + x] = 2; key = (key * 31 + y * W + x) % 1000000007; }
+        // AI가 참고하면 안 되는 곳: 새 옷 밑의 원래 옷, 그리고 사람(피부·얼굴·머리·소품). 손 옆 구멍에 가짜 손이 생기지 않게
+        else if (under(x, y) || catAt(x, y) !== 0) holeMask[y * W + x] = 1;
+      }
+      key = `${box.x0},${box.y0},${box.x1},${box.y1}:${key}`;
+      lastHole = { mask: holeMask, box, key };
+      const ai = scene.aiPatch && scene.aiPatch.key === key ? scene.aiPatch : null;
+      if (ai) {
+        // AI(MI-GAN, models.js)가 메운 조각에서 드러난 자리만 가져온다
+        const pd = ai.canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, ai.canvas.width, ai.canvas.height).data;
+        const pw = ai.canvas.width, d = img.data;
+        for (let y = box.y0; y <= box.y1; y++) for (let x = box.x0; x <= box.x1; x++) {
+          if (holeMask[y * W + x] !== 2) continue;
+          const i = (y * W + x) * 4, q = ((y - box.y0) * pw + (x - box.x0)) * 4;
+          d[i] = pd[q]; d[i + 1] = pd[q + 1]; d[i + 2] = pd[q + 2];
+        }
+      } else {
+        inpaint(img, W, (x, y) => hole(x, y) || under(x, y), box);
+      }
       ctx.putImageData(img, 0, 0);
+    }
+    // 입체 명암(models.js의 깊이 추정): 몸이 돌아가는 곳은 어둡게, 빛을 받는 곳은 밝게.
+    // 명암 지도를 옷 모양으로 잘라 overlay로 얹는다(옷 밖에는 영향 없음)
+    if (scene.depthShade) {
+      const sh = buf('depthShade', W, H);
+      const sg = sh.getContext('2d');
+      sg.globalCompositeOperation = 'source-over';
+      sg.clearRect(0, 0, W, H);
+      sg.drawImage(scene.depthShade, 0, 0, W, H);
+      sg.globalCompositeOperation = 'destination-in';
+      sg.drawImage(G, 0, 0);
+      sg.globalCompositeOperation = 'source-over';
+      const gg2 = G.getContext('2d');
+      gg2.save();
+      gg2.globalCompositeOperation = 'overlay';
+      gg2.globalAlpha = 0.35;
+      gg2.drawImage(sh, 0, 0);
+      gg2.restore();
     }
     finishGarment(G, W, H);
     ctx.drawImage(G, 0, 0);
@@ -1645,6 +1687,6 @@
     return res;
   }
 
-  root.GarmentRender = { draw, visW, walk, inpaint };
+  root.GarmentRender = { draw, visW, walk, inpaint, lastHole: () => lastHole };
   if (typeof module !== 'undefined') module.exports = root.GarmentRender;
 })(typeof window !== 'undefined' ? window : globalThis);

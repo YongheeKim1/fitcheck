@@ -288,8 +288,56 @@ function harmonizedTexture(g, scene) {
   return c;
 }
 
+// ---------- AI 보정(models.js): 사진마다 한 번, 끝나면 다시 그린다 ----------
+function aiEnabled() {
+  try { return localStorage.getItem('fc-ai') !== 'off'; } catch { return true; }
+}
+function updateAiToggle() {
+  $('#ai-toggle').textContent = aiEnabled() ? 'AI 보정 끄기' : 'AI 보정 켜기';
+}
+$('#ai-toggle').addEventListener('click', () => {
+  try { localStorage.setItem('fc-ai', aiEnabled() ? 'off' : 'on'); } catch { /* 저장 못 해도 이번 화면에서는 적용 */ }
+  updateAiToggle();
+  if (tryon.photo) renderTryonPhoto();
+});
+updateAiToggle();
+
+// 깊이(입체 명암)는 사진마다 한 번. 드러난 자리 메우기는 그릴 때마다 구멍이 바뀌므로(옷·사이즈) 구멍 지문별로 한 번
+async function enhanceScene(photo) {
+  const scene = photo.scene;
+  if (!scene || scene.depthStarted || typeof AIModels === 'undefined') return;
+  scene.depthStarted = true;
+  try {
+    $('#ai-hint').textContent = 'AI 보정 준비 중… 처음엔 모델을 받느라 시간이 걸려요. 그동안 기본 결과를 보여 드려요.';
+    scene.depthShade = await AIModels.depthShade(photo.canvas, scene);
+    if (tryon.photo === photo) renderTryonPhoto();
+    $('#ai-hint').textContent = 'AI 보정 적용됨(입체 명암·드러난 배경 메우기). 사진은 기기 밖으로 나가지 않아요.';
+  } catch (err) {
+    console.error(err);
+    scene.depthStarted = false;
+    $('#ai-hint').textContent = /[가-힣]/.test(err.message || '') ? err.message : 'AI 보정을 하지 못했어요. 기본 결과로 보여 드려요.';
+  }
+}
+
+async function aiFillHole(photo) {
+  const scene = photo.scene;
+  const h = GarmentRender.lastHole();
+  if (!scene || !h || scene.aiPatch?.key === h.key || scene.aiBusyKey === h.key || typeof AIModels === 'undefined') return;
+  scene.aiBusyKey = h.key;
+  try {
+    const canvas = await AIModels.inpaintHole(photo.canvas, h.mask, h.box);
+    scene.aiPatch = { key: h.key, canvas };
+    if (tryon.photo === photo) renderTryonPhoto();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (scene.aiBusyKey === h.key) scene.aiBusyKey = null;
+  }
+}
+
 function renderTryonPhoto() {
   const { canvas, pose, pxPerCm, scene } = tryon.photo;
+  if (scene && aiEnabled() && !scene.depthStarted) enhanceScene(tryon.photo);
   if (!scene && !tryon.photo.sceneLoading) {
     // 체형 탭에서 가져온 사진 등 아직 분석 안 된 사진: 분석이 끝나면 다시 그린다
     tryon.photo.sceneLoading = true;
@@ -304,9 +352,12 @@ function renderTryonPhoto() {
   ctx.drawImage(canvas, 0, 0);
   if (!tryon.photo.poseCheck) tryon.photo.poseCheck = BodyAnalysis.checkPose(pose, canvas.width, canvas.height);
   const check = tryon.photo.poseCheck;
-  const opts = garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm, scene: scene || null, poseIssues: check.issues.map((i) => i.key) });
+  // AI 보정을 끄면 이미 계산한 결과도 쓰지 않는다
+  const sceneForDraw = scene && !aiEnabled() ? { ...scene, aiPatch: null, depthShade: null } : scene;
+  const opts = garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm, scene: sceneForDraw || null, poseIssues: check.issues.map((i) => i.key) });
   if (opts.texture && scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, scene) };
   const res = GarmentRender.draw(ctx, opts);
+  if (scene && aiEnabled()) aiFillHole(tryon.photo); // 드러난 자리가 있으면 AI로 메운 뒤 다시 그린다
   $('#tryon-view').replaceChildren(c);
   const notes = res.ok ? [...res.notes, bodySourceNote(opts.category)] : res.notes;
   $('#tryon-notes').innerHTML = notes.map((n) => `<li>${esc(n)}</li>`).join('');

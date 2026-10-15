@@ -106,6 +106,8 @@
           <button type="button" class="primary" id="open-live">카메라로 보기</button>
         </div>
         <p class="hint">정확하게 보려면: 정면으로 서서 팔은 몸 옆에 내리고, 머리부터 발끝까지 나오게 찍어 주세요. 거울 셀카보다 타이머나 다른 사람이 찍어 준 사진이 좋아요.</p>
+        <button type="button" class="ghost block" id="ai-toggle"></button>
+        <p class="hint" id="ai-hint">AI 보정은 새 옷이 원래 옷보다 작아 드러나는 배경을 자연스럽게 메우고, 몸의 굴곡에 맞는 입체 명암을 넣어요. 처음 한 번 약 65MB를 받아요(와이파이 권장). 사진은 기기 밖으로 나가지 않아요.</p>
         <div id="ref-photo" class="ref-photo hidden">
           <p class="hint" id="ref-status"></p>
           <div class="btn-row">
@@ -300,6 +302,7 @@
   <script src="garment.js"></script>
   <script src="app.js"></script>
   <script src="tryon.js"></script>
+  <script src="models.js"></script>
   <script src="garmentsource.js"></script>
   <script src="color.js"></script>
   <script src="colorui.js"></script>
