@@ -141,7 +141,17 @@ const Avatar3D = (() => {
 
   // 내 치수에 맞는 변형값 찾기(감쇠 가우스-뉴턴, 수치 미분)
   const VARS = ['weight', 'muscle', 'vshape', 'bust-circ', 'waist-circ', 'hips-circ', 'thigh-circ', 'shoulder-dist', 'upperleg-height', 'lowerleg-height'];
+  // 같은 치수로 다시 그릴 때(옷 입히기·코디·체형 카드)는 맞춘 변형값을 다시 쓴다(맞추기가 가장 오래 걸린다)
+  const fitCache = new Map();
   function fit(m) {
+    const ck = JSON.stringify([m.H, m.chest, m.waist, m.hip, m.thigh, m.shoulder, m.inseam]);
+    if (fitCache.has(ck)) return fitCache.get(ck);
+    const r = fitNow(m);
+    if (fitCache.size > 8) fitCache.clear();
+    fitCache.set(ck, r);
+    return r;
+  }
+  function fitNow(m) {
     const goal = { chest: m.chest, waist: m.waist, hip: m.hip, thigh: m.thigh, shoulder: m.shoulder, inseam: m.inseam + 4 }; // 줄자 안쪽 길이는 발목뼈 근처까지 → 가랑이 높이는 4cm쯤 더 높다
     const keys = Object.keys(goal);
     const wt = { chest: 1, waist: 1, hip: 1, thigh: 1.2, shoulder: 1.5, inseam: 1.5 };
@@ -291,7 +301,7 @@ const Avatar3D = (() => {
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.15, 'eye-bag': -0.4, 'eye-scale': 0.05,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.8, hairShells: 3, hairShellGap: 0.16 };
+  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.8, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0 };
   const HAND_CURL = { palmSign: -1, seg: [10, 25, 12], more: 2, close: 3, thumb: [0, 10, 10], thumbIn: -60 };
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
@@ -404,9 +414,9 @@ const Avatar3D = (() => {
     let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     g.lineCap = 'round';
     for (let i = 0; i < 2600; i++) {
-      const x = rnd() * 512, y = rnd() * 512, L = 10 + rnd() * 40, a = (rnd() - 0.5) * 0.5;
+      const x = rnd() * 512, y = rnd() * 512, L = 25 + rnd() * 60, a = (rnd() - 0.5) * 0.35;
       const v = Math.round(120 + rnd() * 135);
-      g.strokeStyle = `rgb(${v},${v},${v})`; g.lineWidth = 0.8 + rnd() * 1.4;
+      g.strokeStyle = `rgb(${v},${v},${v})`; g.lineWidth = 0.7 + rnd() * 1.1;
       g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.sin(a) * L, y + Math.cos(a) * L); g.stroke();
     }
     strandT = new THREE.CanvasTexture(c);
@@ -565,7 +575,7 @@ const Avatar3D = (() => {
       let mat;
       if (p.kind === 'hair') {
         const ht = hairRGB.map((v, i) => Math.max(0.05, Math.min(2.5, v / Math.max(8, data.hairAvg[p.name][i]))));
-        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], ...(p.name === 'short02' ? { normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(0.45, 0.45) } : {}), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, specularIntensity: 0.35, sheen: 0.35, sheenRoughness: 0.4, sheenColor: new THREE.Color(0.4, 0.32, 0.26), alphaTest: 0.55, side: THREE.DoubleSide });
+        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], ...(p.name === 'short02' && POSE.hairNormal ? { normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(POSE.hairNormal, POSE.hairNormal) } : {}), ...(POSE.hairBump ? { bumpMap: strandTex(), bumpScale: POSE.hairBump } : {}), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, specularIntensity: 0.35, sheen: 0.35, sheenRoughness: 0.4, sheenColor: new THREE.Color(0.4, 0.32, 0.26), alphaTest: 0.55, side: THREE.DoubleSide });
       } else if (p.kind === 'brow' || p.kind === 'lash') {
         mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(Math.min(1, hairRGB[0] / 255 * 1.5), Math.min(1, hairRGB[1] / 255 * 1.5), Math.min(1, hairRGB[2] / 255 * 1.5)).convertSRGBToLinear() : new THREE.Color(0.06, 0.05, 0.045), roughness: 0.8, ...(p.kind === 'lash' && POSE.lashOpaque ? { alphaTest: 0.4 } : { transparent: true, opacity: 1, alphaTest: 0.05, depthWrite: false }), side: THREE.DoubleSide });
       } else if (p.kind === 'eye') {
