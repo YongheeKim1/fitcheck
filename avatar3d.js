@@ -290,7 +290,8 @@ const Avatar3D = (() => {
     'cheek-vol': -0.25, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.15, 'eye-bag': -0.4, 'eye-scale': 0.05,
   };
-  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.8 };
+  const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
+  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.8, hairShells: 3, hairShellGap: 0.16 };
   const HAND_CURL = { palmSign: -1, seg: [10, 25, 12], more: 2, close: 3, thumb: [0, 10, 10], thumbIn: -60 };
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
@@ -385,12 +386,32 @@ const Avatar3D = (() => {
         for (let i = 0; i < n; i++) {
           const d = (S[i * 3] - P[i * 3]) * N[i * 3] + (S[i * 3 + 1] - P[i * 3 + 1]) * N[i * 3 + 1] + (S[i * 3 + 2] - P[i * 3 + 2]) * N[i * 3 + 2];
           // 큰 굴곡은 얼굴(눈두덩·콧방울·입꼬리)에만 진하게: 몸통에 쓰면 가슴·쇄골에 멍처럼 얼룩진다
-          const wgt = it === 3 ? 0.45 : 0.03 + 0.47 * (hw[i] / 255);
+          const wgt = it === 3 ? 0.15 + 0.3 * (hw[i] / 255) : 0.03 + 0.47 * (hw[i] / 255);
           out[i] += Math.max(0, Math.min(1, d / sc)) * wgt;
         }
       }
     }
     return out;
+  }
+
+  // 머리카락 가닥 무늬(알파): 가는 세로 획을 무작위로 겹쳐 그린 캔버스(한 번만 만든다)
+  let strandT = null;
+  function strandTex() {
+    if (strandT) return strandT;
+    const c = document.createElement('canvas'); c.width = c.height = 512;
+    const g = c.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, 512, 512);
+    let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    g.lineCap = 'round';
+    for (let i = 0; i < 2600; i++) {
+      const x = rnd() * 512, y = rnd() * 512, L = 10 + rnd() * 40, a = (rnd() - 0.5) * 0.5;
+      const v = Math.round(120 + rnd() * 135);
+      g.strokeStyle = `rgb(${v},${v},${v})`; g.lineWidth = 0.8 + rnd() * 1.4;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.sin(a) * L, y + Math.cos(a) * L); g.stroke();
+    }
+    strandT = new THREE.CanvasTexture(c);
+    strandT.wrapS = strandT.wrapT = THREE.RepeatWrapping; strandT.repeat.set(3, 3);
+    return strandT;
   }
 
   // 머리카락 그늘: 머리 피부 정점마다 가장 가까운 머리카락 정점까지 거리(cm) → 가까울수록 1
@@ -565,6 +586,22 @@ const Avatar3D = (() => {
         const soft = new THREE.Mesh(g, Object.assign(mat.clone(), { alphaTest: 0.04, transparent: true, depthWrite: false }));
         soft.userData.kind = 'hair'; soft.renderOrder = 3; soft.receiveShadow = true;
         scene.add(soft); headParts.push(soft);
+        // 털 껍질: 머리카락 겉에 가닥 무늬로 듬성듬성 뚫린 얇은 막을 몇 겹 씌워 윤곽이 매끈한 덩어리(헬멧)가 아니라 보송하게
+        if (POSE.hairShells > 0) {
+          g.computeVertexNormals();
+          const pos = g.attributes.position.array, nor = g.attributes.normal.array;
+          for (let k = 1; k <= POSE.hairShells; k++) {
+            const off = k * POSE.hairShellGap;
+            const gk = g.clone(), pk = gk.attributes.position.array;
+            for (let i = 0; i < pk.length; i++) pk[i] = pos[i] + nor[i] * off;
+            gk.attributes.position.needsUpdate = true;
+            const mk = Object.assign(mat.clone(), { alphaMap: strandTex(), alphaTest: 0.3 + 0.12 * k, transparent: false });
+            mk.color = mat.color.clone().multiplyScalar(1 + 0.08 * k); // 바깥 가닥이 빛을 조금 더 받는다
+            const sh = new THREE.Mesh(gk, mk);
+            sh.userData.kind = 'hair'; sh.renderOrder = 1; sh.receiveShadow = true;
+            scene.add(sh); headParts.push(sh);
+          }
+        }
       }
     }
 
@@ -575,14 +612,16 @@ const Avatar3D = (() => {
     }
     // 조명: 왼쪽 위 앞 주광(그림자) + 오른쪽 보조광 + 뒤 윤곽광 + 하늘/바닥 반사
     scene.add(new THREE.HemisphereLight(0xfff6ee, 0x6a5a52, 0.18));
-    const key = new THREE.DirectionalLight(0xfff1e4, 2.2);
+    const key = new THREE.DirectionalLight(0xfff1e4, LIGHT.key);
     key.position.set(-25, 240, 500); key.castShadow = true; // 거의 정면 위: 손·팔 그림자가 몸 뒤로 떨어지게
     key.shadow.mapSize.set(1024, 1024);
     Object.assign(key.shadow.camera, { left: -60, right: 60, top: 200, bottom: -10, near: 10, far: 900 });
     key.shadow.bias = -0.0004; key.shadow.normalBias = 0.6; key.shadow.radius = 18; key.shadow.blurSamples = 24;
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0xe8eeff, 0.45); fill.position.set(200, 80, 200); scene.add(fill);
-    const rim = new THREE.DirectionalLight(0xffffff, 1.1); rim.position.set(60, 200, -250); scene.add(rim);
+    const fill = new THREE.DirectionalLight(0xe8eeff, LIGHT.fill); fill.position.set(200, 80, 200); scene.add(fill);
+    // 윤곽광 두 개(뒤 양옆): 어깨·팔·머리 가장자리에 얇은 빛 테두리 → 배경과 분리
+    const rim = new THREE.DirectionalLight(0xffffff, LIGHT.rim); rim.position.set(160, 140, -250); scene.add(rim);
+    const rim2 = new THREE.DirectionalLight(0xfff4ea, LIGHT.rim2); rim2.position.set(-170, 120, -240); scene.add(rim2);
 
     if (!renderer) {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
@@ -593,8 +632,8 @@ const Avatar3D = (() => {
     // 스튜디오 반사광(환경 조명): 회색 방 + 소프트박스 3개를 미리 구워 피부·머리카락에 부드러운 빛과 반사를 준다
     if (!studioEnv) studioEnv = makeStudio();
     scene.environment = studioEnv;
-    scene.environmentIntensity = 0.45;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.84;
+    scene.environmentIntensity = LIGHT.env;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = LIGHT.exposure;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setClearColor(0x000000, 0);
 
@@ -803,7 +842,7 @@ const Avatar3D = (() => {
     return { canvas, pose: lm, pxPerCm: s, scene: sceneOut, poseCheck: { ok: true, issues: [] }, isAvatar: true, is3D: true, measures: m, fitted: meas, hasFace: !!face?.img };
   }
 
-  return { load, build, fit, measure, morph, HAND_CURL, POSE, FACE };
+  return { load, build, fit, measure, morph, HAND_CURL, POSE, FACE, LIGHT };
 })();
 
 // 내 체형 탭의 아바타 카드를 3D로 바꿔 그리기(첫 화면을 막지 않게 한가할 때)

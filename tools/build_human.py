@@ -348,7 +348,7 @@ def even_skin(src, dst):
         return np.clip(1.6 - d, 0, 1) ** 1.5 * (d < 1.6)
     k = np.maximum(k * (1 - ell(1866, 1060, 40, 52)), 1.0 * ell(1866, 1060, 40, 52))  # 입술
     for cx, cy in [(663, 620), (893, 606)]:
-        e = ell(cx, cy, 26, 26); k = k * (1 - e) + 0.4 * e  # 유두
+        e = ell(cx, cy, 18, 18); k = k * (1 - e) + 0.6 * e  # 유두
     e = ell(780, 990, 30, 75) * (1 - ell(780, 890, 22, 22)); k = k * (1 - e) + 0.15 * e  # 배꼽 아래 털 줄
     k = np.asarray(Image.fromarray((k * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(8))).astype(np.float32) / 255
     ratio = a / low
