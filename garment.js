@@ -1755,8 +1755,10 @@
           outer.push(add(p, mul(nl, wo)));
           inner.push(sub(p, mul(nl, w)));
         });
+        const inner0 = inner[0];
         outer[0] = sp; // 소매 시작은 봉제선과 겨드랑이에 딱 붙인다(어깨 위로 튀어나오지 않게)
-        inner[0] = ap;
+        // 내린 팔: 소매 안쪽 시작을 겨드랑이(몸판 옆)까지 끌어오면 안쪽 선이 갈고리처럼 꺾인다 → 소매 자체의 안쪽 선을 쓴다
+        inner[0] = lerpV(ap, inner0, hang * 0.85);
         // 팔을 들면(위팔이 아래 방향에서 45° 넘게 벌어지면) 소매 시작선을 어깨 봉제선을 축으로 돌려 위팔에 수직이 되게 한다.
         // 그대로 두면 시작선은 "어깨 끝→겨드랑이"인데 소매는 위로 뻗어 비틀린 리본처럼 보인다
         const upArm = norm(sub(elbow, sp));
@@ -1769,7 +1771,17 @@
           inner[0] = lerpV(ap, rot, t);
           for (let j = 1; j < Math.min(3, inner.length); j++) inner[j] = lerpV(inner[j], add(outer[j], mul(perp, len(sub(inner[j], outer[j])))), t * (1 - j / 3));
         }
-        sleeves.push([...outer, ...inner.slice().reverse()]);
+        // 어깨 끝 덮개: 봉제선과 다음 바깥 점 사이 직선이 둥근 어깨를 가로지르면 살이 비친다 → 그 사이를 어깨 윤곽 밖으로 민 점 2개
+        const capPts = [];
+        if (outer.length > 1) {
+          for (const t of [0.35, 0.7]) {
+            const q = lerpV(outer[0], outer[1], t), dirq = norm(sub(q, S0));
+            const e = bodyEdge(S0, dirq, 14 * s);
+            const dq = len(sub(q, S0));
+            capPts.push(e != null && e + 0.8 * s > dq ? add(S0, mul(dirq, e + 0.8 * s)) : q);
+          }
+        }
+        sleeves.push([outer[0], ...capPts, ...outer.slice(1), ...inner.slice().reverse()]);
         sleeveTargets.push({ startX: sp.x, rib: outer.map((p, i) => [p, inner[i]]), poly: sleeves[sleeves.length - 1] });
         // 팔꿈치를 덮는 소매: 팔꿈치 안쪽에 짧은 주름(팔을 굽힐수록 진하게)
         const toElbow = arcTo(tubePath, elbow);
