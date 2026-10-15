@@ -361,7 +361,7 @@ function renderTryonPhoto() {
   if (!tryon.photo.poseCheck) tryon.photo.poseCheck = BodyAnalysis.checkPose(pose, canvas.width, canvas.height);
   const check = tryon.photo.poseCheck;
   // AI 보정을 끄면 이미 계산한 결과도 쓰지 않는다
-  const sceneForDraw = scene && !aiEnabled() ? { ...scene, aiPatch: null, depthShade: null } : scene;
+  const sceneForDraw = scene && !aiEnabled() && !scene.isAvatar ? { ...scene, aiPatch: null, depthShade: null } : scene; // 아바타 명암은 3D에서 온 것(AI 아님)
   const opts = garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm, scene: sceneForDraw || null, poseIssues: check.issues.map((i) => i.key) });
   if (opts.texture && scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, scene) };
   const res = GarmentRender.draw(ctx, opts);
@@ -468,7 +468,7 @@ function renderSizeCompare() {
   if (idx.length < 3 && results.length >= 3) idx = i0 === 0 ? [0, 1, 2] : [results.length - 3, results.length - 2, results.length - 1];
   const { canvas, pose, pxPerCm, scene } = photo;
   const check = photo.poseCheck || BodyAnalysis.checkPose(pose, canvas.width, canvas.height);
-  const sceneForDraw = scene && !aiEnabled() ? { ...scene, aiPatch: null, depthShade: null } : scene;
+  const sceneForDraw = scene && !aiEnabled() && !scene.isAvatar ? { ...scene, aiPatch: null, depthShade: null } : scene; // 아바타 명암은 3D에서 온 것(AI 아님)
   const figs = idx.map((i) => {
     const r = results[i];
     const c = document.createElement('canvas');

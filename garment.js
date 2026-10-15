@@ -1254,7 +1254,7 @@
       const gg2 = G.getContext('2d');
       gg2.save();
       gg2.globalCompositeOperation = 'overlay';
-      gg2.globalAlpha = 0.35;
+      gg2.globalAlpha = scene.isAvatar ? 0.5 : 0.35; // 아바타 명암은 3D 조명에서 온 것
       gg2.drawImage(sh, 0, 0);
       gg2.restore();
     }

@@ -7,7 +7,8 @@ const Avatar3D = (() => {
   const CW = 640, CH = 1280, TOP = 40, FLOOR = CH - 56;
   const SS = 2; // 두 배 크기로 그려 줄여서 계단 현상 없애기
   const BASE = 'models/human/';
-  const THREE_URL = 'https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.min.js';
+  const CDN = 'https://cdn.jsdelivr.net/npm/three@0.169.0';
+  const THREE_URL = CDN + '/build/three.module.min.js';
   let data = null, THREE = null, renderer = null, loading = null;
 
   // ---------- 데이터 읽기 ----------
@@ -27,8 +28,8 @@ const Avatar3D = (() => {
       for (const [k, m] of Object.entries(meta.morphs)) morphs[k] = { idx: arr(`m.${k}.idx`), d: arr(`m.${k}.d`), scale: m.scale };
       const tex = {};
       const loader = new THREE.TextureLoader();
-      const texNames = ['skin.jpg', ...meta.proxies.map((p) => p.tex)];
-      await Promise.all(texNames.map((n) => new Promise((res, rej) => loader.load(BASE + n, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; tex[n] = t; res(); }, undefined, rej))));
+      const texNames = ['skin.jpg', 'hair_n.jpg', ...meta.proxies.map((p) => p.tex)];
+      await Promise.all(texNames.map((n) => new Promise((res, rej) => loader.load(BASE + n, (t) => { if (!n.endsWith('_n.jpg')) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; tex[n] = t; res(); }, undefined, rej))));
       data = {
         meta, morphs, tex,
         base: arr('base'), normTris: arr('normTris'),
@@ -344,9 +345,9 @@ const Avatar3D = (() => {
       let mat;
       if (p.kind === 'hair') {
         const ht = hairRGB.map((v, i) => Math.max(0.05, Math.min(2.5, v / Math.max(8, data.hairAvg[i]))));
-        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.45, alphaTest: 0.35, transparent: true, side: THREE.DoubleSide, depthWrite: true });
+        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(1.2, 1.2), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, sheen: 0.25, sheenRoughness: 0.5, sheenColor: new THREE.Color(0.3, 0.26, 0.24), alphaTest: 0.3, side: THREE.DoubleSide });
       } else if (p.kind === 'brow' || p.kind === 'lash') {
-        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: new THREE.Color(0.35, 0.3, 0.28), roughness: 0.8, transparent: true, alphaTest: 0.08, depthWrite: false, side: THREE.DoubleSide });
+        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(hairRGB[0] / 255 * 0.5, hairRGB[1] / 255 * 0.5, hairRGB[2] / 255 * 0.5) : new THREE.Color(0.2, 0.17, 0.16), roughness: 0.8, transparent: true, opacity: p.kind === 'brow' ? 1 : 0.9, alphaTest: 0.05, depthWrite: false, side: THREE.DoubleSide });
       } else if (p.kind === 'eye') {
         mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.05, transparent: true, alphaTest: 0.02 });
       } else {
@@ -362,14 +363,14 @@ const Avatar3D = (() => {
     }
 
     // 조명: 왼쪽 위 앞 주광(그림자) + 오른쪽 보조광 + 뒤 윤곽광 + 하늘/바닥 반사
-    scene.add(new THREE.HemisphereLight(0xfff6ee, 0x7a6a60, 0.7));
-    const key = new THREE.DirectionalLight(0xfff1e4, 2.4);
-    key.position.set(-40, 170, 520); // 거의 정면 위: 손·팔 그림자가 몸 뒤로 떨어지게 key.castShadow = true;
+    scene.add(new THREE.HemisphereLight(0xfff6ee, 0x6a5a52, 0.5));
+    const key = new THREE.DirectionalLight(0xfff1e4, 2.9);
+    key.position.set(-40, 170, 520); key.castShadow = true; // 거의 정면 위: 손·팔 그림자가 몸 뒤로 떨어지게
     key.shadow.mapSize.set(2048, 2048);
     Object.assign(key.shadow.camera, { left: -60, right: 60, top: 200, bottom: -10, near: 10, far: 900 });
     key.shadow.bias = -0.0004; key.shadow.normalBias = 0.6; key.shadow.radius = 4;
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0xe8eeff, 0.7); fill.position.set(200, 80, 200); scene.add(fill);
+    const fill = new THREE.DirectionalLight(0xe8eeff, 0.45); fill.position.set(200, 80, 200); scene.add(fill);
     const rim = new THREE.DirectionalLight(0xffffff, 1.1); rim.position.set(60, 200, -250); scene.add(rim);
 
     if (!renderer) {
@@ -390,6 +391,40 @@ const Avatar3D = (() => {
       return c;
     };
     const full = shot();
+    // 옷 명암 지도: 흰 석고 몸을 같은 조명으로 그려 밝기만 얻는다(옷 입히기 엔진의 depthShade와 같은 형식, 128 = 그대로)
+    let shadeMap = null;
+    {
+      const vis = scene.children.filter((o) => o.isMesh).map((o) => [o, o.visible]);
+      vis.forEach(([o]) => { o.visible = o === body; });
+      const plaster = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
+      body.material = plaster;
+      renderer.toneMapping = THREE.NoToneMapping;
+      const lit = shot();
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      body.material = skinMat; plaster.dispose();
+      vis.forEach(([o, v]) => { o.visible = v; });
+      const S2 = 160, H2 = 320; // 작게 줄여(잔굴곡 없애기) 밝기 평균에서 벗어난 만큼
+      const t2 = document.createElement('canvas'); t2.width = S2; t2.height = H2;
+      const g2 = t2.getContext('2d', { willReadFrequently: true });
+      g2.drawImage(lit, 0, 0, S2, H2);
+      const d2 = g2.getImageData(0, 0, S2, H2), px = d2.data;
+      let sum = 0, n = 0;
+      for (let i = 0; i < px.length; i += 4) if (px[i + 3] > 200) { sum += px[i]; n++; }
+      const avg = sum / Math.max(1, n);
+      // 몸 가장자리 3칸(옷이 덮고 넘어가는 곳)과 다리 사이는 빼고 몸 안쪽의 굴곡만(옷에 몸 윤곽이 찍히지 않게)
+      const inside = (x, y) => x >= 0 && y >= 0 && x < S2 && y < H2 && px[(y * S2 + x) * 4 + 3] > 200;
+      const vals = new Float32Array(S2 * H2);
+      for (let y = 0; y < H2; y++) for (let x = 0; x < S2; x++) {
+        let ok = true;
+        for (let d = -3; d <= 3 && ok; d++) ok = inside(x + d, y) && inside(x, y + d);
+        vals[y * S2 + x] = ok ? 128 + Math.max(-30, Math.min(26, (px[(y * S2 + x) * 4] - avg) * 0.7)) : 128;
+      }
+      for (let i = 0; i < vals.length; i++) { px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = vals[i]; px[i * 4 + 3] = 255; }
+      g2.putImageData(d2, 0, 0);
+      shadeMap = document.createElement('canvas'); shadeMap.width = CW; shadeMap.height = CH;
+      const sg = shadeMap.getContext('2d'); sg.imageSmoothingQuality = 'high';
+      sg.fillStyle = '#808080'; sg.fillRect(0, 0, CW, CH); sg.filter = 'blur(9px)'; sg.drawImage(t2, 0, 0, CW, CH); sg.filter = 'none';
+    }
     // 머리 층(옷 위에 다시 얹는 얼굴·머리카락·목 위쪽): 몸에서 머리 가중치가 큰 면만
     const headTris = [];
     const bt = data.body.tris, br = data.body.ref, hw = data.w.head;
@@ -490,6 +525,7 @@ const Avatar3D = (() => {
       illum: { rgb: [244, 242, 238], Y: 243 },
       tilt: -0.15, shadeK: 1,
       isAvatar: true,
+      depthShade: shadeMap, // 3D 조명에서 얻은 옷 명암(AI 깊이 추정 대신)
     };
     return { canvas, pose: lm, pxPerCm: s, scene: sceneOut, poseCheck: { ok: true, issues: [] }, isAvatar: true, is3D: true, measures: m, fitted: meas, hasFace: false };
   }

@@ -266,6 +266,7 @@ def save(src, dst, size, alpha=False):
     else: im.convert('RGB').save(os.path.join(OUT, dst), quality=86, optimize=True)
 save('skin_diffuse.png', 'skin.jpg', 2048)
 save('short02_diffuse.png', 'hair.png', 1024, True)
+save('short02_normal.png', 'hair_n.jpg', 1024)
 save('eyebrow001.png', 'eyebrow.png', 256, True)
 save('eyelashes01.png', 'lashes.png', 256, True)
 save('brownlight_eye.png', 'eye.png', 512, True)

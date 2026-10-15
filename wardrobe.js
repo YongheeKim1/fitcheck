@@ -271,7 +271,7 @@ async function runOutfit() {
     }
     const tuck = tuckIn && top && bottom ? tuckRow(model, top, bottom, waistTop) : null;
     // AI 보정을 꺼 두었으면 입체 명암도 쓰지 않는다
-    let scene = model.scene && !aiEnabled() ? { ...model.scene, depthShade: null, aiPatch: null } : model.scene;
+    let scene = model.scene && !aiEnabled() && !model.scene.isAvatar ? { ...model.scene, depthShade: null, aiPatch: null } : model.scene;
     if (scene && aiEnabled()) scene = { ...scene, aiPatches: wardrobe.patches };
     if (scene && aiEnabled() && !scene.depthShade && !scene.isAvatar && typeof AIModels !== 'undefined' && !model.depthStarted) {
       // 입체 명암은 사진마다 한 번(끝나면 다시 그린다)
