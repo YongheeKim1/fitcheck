@@ -148,7 +148,9 @@
   let liveMode = false;     // 카메라(실시간): 가볍게 그린다
   let shadeCache = null;   // 카메라에서 명암 지도를 몇 프레임 재사용
   let shadeAge = 0;
+  let avatarShade = null;  // 아바타: 맨몸 사진의 명암(가슴·속옷 경계)이 옷에 비치면 안 된다 → 3D 조명 명암(또는 평평한 회색)
   function shadingMap() {
+    if (avatarShade) return avatarShade;
     // 카메라에서는 4프레임에 한 번만 새로(화면 픽셀 읽기가 GPU를 기다리게 해서 느리다. 주름은 그렇게 빨리 안 바뀐다)
     if (liveMode && shadeCache && shadeCache.w === photo.width && ++shadeAge < 4) return shadeCache.c;
     shadeAge = 0;
@@ -1631,6 +1633,22 @@
     // 총장은 HPS부터, 소매는 봉제선부터 재므로, 작은 옷은 자리가 바뀌지 않고 밑단·소매 끝이 짧아진다.
     // 분할 결과가 없으면(라이브 초기 등) 관절 기준 어림값
     const contour = o.seg ? shoulderContour(o.seg, o.W, o.H, M.y - torso * 0.7, M.y + torso * 0.35) : null;
+    // p에서 방향 dir로 나가며 몸(피부 2·옷 4) 픽셀이 끝나는 거리(px). 분할이 없거나 시작점이 몸 밖이면 null
+    const bodyEdge = (p, dir, maxD) => {
+      const sg = o.seg;
+      if (!sg) return null;
+      const at = (x, y) => {
+        const cx = Math.floor(((sg.mirror ? o.W - 1 - x : x) * sg.w) / o.W), cy = Math.floor((y * sg.h) / o.H);
+        if (cx < 0 || cy < 0 || cx >= sg.w || cy >= sg.h) return false;
+        const c = sg.cat[cy * sg.w + cx];
+        return c === 2 || c === 4;
+      };
+      if (!at(p.x, p.y)) return null;
+      const step = Math.max(1, o.W / sg.w);
+      let last = 0;
+      for (let t = step; t <= maxD; t += step) { if (at(p.x + dir.x * t, p.y + dir.y * t)) last = t; else break; }
+      return last;
+    };
     let HPS = sub(M, mul(u, 4 * s));                           // 옷깃 옆 어깨 가장 높은 곳
     if (contour) {
       // 관절 기준 어림값에서 너무 멀리 떨어진 값(머리카락·잡힌 물건)은 버리고, 양쪽 차이가 크면 낮은 쪽(어깨에 가까운 쪽)을 믿는다
@@ -1679,8 +1697,18 @@
       const t = Math.PI - (Math.PI * k) / 8;
       neck.push(add(HPS, add(mul(n, Math.cos(t) * neckW), mul(u, Math.sin(t) * 8 * s))));
     }
+    // 몸판 윗선: 목 옆 → 봉제선. 실제 어깨 윤곽이 직선보다 높으면 그 윤곽(0.6cm 위)을 따라간다(어깨 꼭대기 살이 비치지 않게)
+    const topEdge = (sd) => {
+      const a = add(HPS, mul(n, sd * neckW)), b = seam(sd), pts = [];
+      for (let k = 1; k < 8; k++) {
+        const q = lerpV(a, b, k / 8);
+        const y = contour ? contour(q.x) : null;
+        pts.push(y != null && y < q.y && y > q.y - 6 * s ? V(q.x, y - 0.6 * s) : q);
+      }
+      return pts;
+    };
     const bodyPoly = [
-      seam(-1), ...neck, seam(1),
+      seam(-1), ...topEdge(-1).reverse(), ...neck, ...topEdge(1), seam(1),
       armpit(1), add(waistAt, mul(n, ww / 2)), add(hemC, mul(n, hw / 2)),
       sub(hemC, mul(n, hw / 2)), sub(waistAt, mul(n, ww / 2)), armpit(-1),
     ];
@@ -1721,7 +1749,10 @@
           let nl = V(-dir.y, dir.x);
           if (dot(nl, n) * side < 0) nl = mul(nl, -1);   // 바깥쪽을 향하게
           const w = lerp(startW, endW, d / Lc) / 2;
-          outer.push(add(p, mul(nl, w)));
+          // 소매는 팔을 덮어야 한다: 사진(분할)에서 팔 바깥 가장자리까지 재서 모자라면 넓힌다(어깨 끝 살이 비치지 않게)
+          const edge = bodyEdge(p, nl, w * 1.7);
+          const wo = edge != null ? Math.max(w, Math.min(w * 1.6, edge + 0.8 * s)) : w;
+          outer.push(add(p, mul(nl, wo)));
           inner.push(sub(p, mul(nl, w)));
         });
         outer[0] = sp; // 소매 시작은 봉제선과 겨드랑이에 딱 붙인다(어깨 위로 튀어나오지 않게)
@@ -1955,12 +1986,17 @@
     }
     shadeK = opts.scene?.shadeK ?? 1;
     drawCategory = opts.category;
+    avatarShade = null;
+    if (opts.scene?.isAvatar && canMakeCanvas) {
+      avatarShade = opts.scene.depthShade || null;
+      if (!avatarShade) { avatarShade = buf('flatShade', 4, 4); const fg = avatarShade.getContext('2d'); fg.fillStyle = '#808080'; fg.fillRect(0, 0, 4, 4); }
+    }
     if (!opts.seg && opts.scene?.cat) opts = { ...opts, seg: opts.scene }; // 어깨 윤곽선용 분할
     liveMode = !!opts.live;
     // 팔을 들었거나 몸 앞을 가리면 옷 사진(팔 내린 모델)과 자세 차이가 커서, 하나로 휘면 몸판이 끌려간다 → 띠 방식
     armsFront = (opts.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross' || k === 'face');
     // 바지는 두 다리 사이 틈이 구불구불해져서 띠 방식이 낫다 → 상의에만 쓴다
-    useTPS = opts.tps !== false && opts.category === 'top' && !(opts.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross');
+    useTPS = opts.tps !== false && opts.category === 'top' && !(opts.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross') && !opts.scene?.isAvatar; // 아바타는 팔이 몸에 가까워 소매 끝과 밑단 대응점이 붙으면 TPS가 천을 소용돌이처럼 접는다 → 띠 방식
     const drawFn = opts.category === 'top' ? drawTop : drawBottom;
     noMarks = !!(opts.texture && opts.texture.category === opts.category);
     if (!(opts.scene && photo)) return drawFn(ctx, opts);
