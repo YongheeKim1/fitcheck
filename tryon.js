@@ -514,6 +514,63 @@ async function getLiveModel() {
   return tryon.liveModel;
 }
 
+// 실시간 사람 분할(가벼운 selfie_multiclass, VIDEO 모드): 손·팔을 옷 위로 올리고 배경으로 조명 색을 잰다
+async function getLiveSegmenter() {
+  if (tryon.liveSeg) return tryon.liveSeg;
+  const vision = await import(`${MP_URL}/vision_bundle.mjs`);
+  const fileset = await vision.FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
+  const opts = (delegate) => ({
+    baseOptions: { modelAssetPath: SEG_MODEL, delegate }, // garmentsource.js
+    runningMode: 'VIDEO',
+    outputCategoryMask: true,
+    outputConfidenceMasks: false,
+  });
+  try {
+    tryon.liveSeg = await vision.ImageSegmenter.createFromOptions(fileset, opts('GPU'));
+  } catch {
+    tryon.liveSeg = await vision.ImageSegmenter.createFromOptions(fileset, opts('CPU'));
+  }
+  return tryon.liveSeg;
+}
+
+// 분할 결과(256×256 라벨) → 피부 알파 마스크 캔버스, 배경 비율로 잰 조명(2초마다)
+function updateLiveSeg(l, video, now) {
+  // 초당 약 6번이면 손 움직임을 따라간다. 한 프레임에 일이 몰리지 않게 두 프레임에 한 번만
+  l.frame = (l.frame || 0) + 1;
+  if (!l.seg || now - (l.segAt || 0) < 150 || l.frame % 2) return;
+  l.segAt = now;
+  let r;
+  try { r = l.seg.segmentForVideo(video, now); } catch { return; }
+  const m = r.categoryMask;
+  if (!m) return;
+  const cat = m.getAsUint8Array();
+  const w = m.width, h = m.height;
+  r.close?.();
+  if (!l.skinMask || l.skinMask.width !== w) { l.skinMask = document.createElement('canvas'); l.skinMask.width = w; l.skinMask.height = h; }
+  const g = l.skinMask.getContext('2d');
+  const img = g.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) img.data[i * 4 + 3] = cat[i] === 2 ? 255 : 0;
+  g.putImageData(img, 0, 0);
+  l.cat = { cat: Uint8Array.from(cat), w, h };
+}
+
+function updateLiveLight(l, canvas, now) {
+  if (now - (l.lightAt || 0) < 2000) return;
+  l.lightAt = now;
+  const sw = 96, sh = Math.max(1, Math.round((canvas.height * sw) / canvas.width));
+  const c = document.createElement('canvas'); c.width = sw; c.height = sh;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(canvas, 0, 0, sw, sh);
+  const d = g.getImageData(0, 0, sw, sh).data;
+  const mirror = l.facing === 'user';
+  const bg = l.cat ? (x, y) => {
+    const xx = mirror ? sw - 1 - x : x;
+    return l.cat.cat[Math.floor((y * l.cat.h) / sh) * l.cat.w + Math.floor((xx * l.cat.w) / sw)] === 0;
+  } : () => true;
+  const illum = estimateIllum(d, sw, sh, bg);
+  if (illum) l.scene = { illum, tilt: 0 }; // 새 객체 → harmonizedTexture가 다시 계산
+}
+
 async function startCamera(facing) {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -558,9 +615,12 @@ function liveLoop() {
   const video = $('#live-video');
   const canvas = $('#live-canvas');
   if (video.readyState >= 2 && video.videoWidth) {
-    if (canvas.width !== video.videoWidth) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+    // 처리 해상도: 긴 변 640px(폰 화면에서는 차이가 거의 안 보이고, 그리는 시간이 크게 준다)
+    const k = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
+    const cw = Math.round(video.videoWidth * k), ch = Math.round(video.videoHeight * k);
+    if (canvas.width !== cw || canvas.height !== ch) {
+      canvas.width = cw;
+      canvas.height = ch;
     }
     const W = canvas.width, H = canvas.height;
     const ctx = canvas.getContext('2d');
@@ -570,7 +630,10 @@ function liveLoop() {
     ctx.drawImage(video, 0, 0, W, H);
     ctx.restore();
 
-    const res = l.landmarker.detectForVideo(video, performance.now());
+    const now = performance.now();
+    const res = l.landmarker.detectForVideo(video, now);
+    updateLiveSeg(l, video, now);
+    updateLiveLight(l, canvas, now);
     const lm = res.landmarks?.[0];
     if (!lm) {
       l.smooth = null;
@@ -585,12 +648,80 @@ function liveLoop() {
         const sw = Math.hypot((l.smooth[11].x - l.smooth[12].x) * W, (l.smooth[11].y - l.smooth[12].y) * H);
         const scale = sw / shoulderJointCm();
         l.scale = l.scale ? l.scale + (scale - l.scale) * 0.2 : scale;
-        const r = GarmentRender.draw(ctx, garmentOpts({ lm: l.smooth, W, H, mirror, pxPerCm: l.scale }));
-        liveHint(r.notes.slice(0, 2).join(' '));
+        const check = BodyAnalysis.checkPose(l.smooth, W, H);
+        const opts = garmentOpts({ lm: l.smooth, W, H, mirror, pxPerCm: l.scale, live: true, tps: false, poseIssues: check.issues.map((i) => i.key) });
+        if (opts.texture && l.scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, l.scene) };
+        const r = GarmentRender.draw(ctx, opts);
+        if (r.ok && r.geo && l.skinMask) liveFront(ctx, video, r.geo, l, W, H, mirror);
+        // 자세 문제가 있으면 그것부터 알려 준다(팔을 내리면 더 정확해요 등)
+        liveHint(check.ok ? r.notes.slice(0, 2).join(' ') : `${check.issues[0].text}. 팔을 내리고 정면으로 서면 더 정확해요.`);
       }
     }
   }
   l.raf = requestAnimationFrame(liveLoop);
+}
+
+// 손·팔(피부)을 옷 위로: 손 둘레(geo.hands) 안이면서 분할에서 피부인 곳의 카메라 화면. 새 소매 안쪽은 뺀다
+function liveFront(ctx, video, geo, l, W, H, mirror) {
+  if (!l.front) l.front = document.createElement('canvas');
+  const f = l.front;
+  if (f.width !== W || f.height !== H) { f.width = W; f.height = H; }
+  const g = f.getContext('2d');
+  g.globalCompositeOperation = 'source-over';
+  g.clearRect(0, 0, W, H);
+  g.strokeStyle = '#fff';
+  g.lineCap = 'round';
+  for (const s of geo.hands) {
+    g.lineWidth = s.r * 2;
+    g.beginPath(); g.moveTo(s.a.x, s.a.y); g.lineTo(s.b.x, s.b.y); g.stroke();
+  }
+  if (geo.noSkin?.length) {
+    g.globalCompositeOperation = 'destination-out';
+    g.fillStyle = '#fff';
+    for (const pts of geo.noSkin) {
+      g.beginPath();
+      pts.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)));
+      g.closePath();
+      g.fill();
+    }
+  }
+  g.globalCompositeOperation = 'destination-in';
+  g.save();
+  if (mirror) { g.translate(W, 0); g.scale(-1, 1); }
+  g.imageSmoothingEnabled = true;
+  g.drawImage(l.skinMask, 0, 0, W, H);
+  g.restore();
+  g.globalCompositeOperation = 'source-in';
+  g.save();
+  if (mirror) { g.translate(W, 0); g.scale(-1, 1); }
+  g.drawImage(video, 0, 0, W, H);
+  g.restore();
+  g.globalCompositeOperation = 'source-over';
+  ctx.drawImage(f, 0, 0);
+}
+
+// 찍기: 지금 화면(보이는 그대로, 셀카면 좌우 반전)을 원본 해상도로 찍어 사진 모드의 정밀 결과로 넘긴다
+async function liveShot() {
+  const l = tryon.live;
+  const video = $('#live-video');
+  if (!l || !video.videoWidth) return;
+  if (!state.body.height) { $('#live-hint').textContent = "'내 체형' 탭에서 키를 먼저 입력해 주세요."; return; }
+  const c = document.createElement('canvas');
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  const g = c.getContext('2d');
+  if (l.facing === 'user') { g.translate(c.width, 0); g.scale(-1, 1); }
+  g.drawImage(video, 0, 0);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.95));
+  closeLive();
+  try {
+    tryon.photo = await analyzeTryonPhoto(blob);
+    tryon.photoUploaded = true;
+    renderTryonPhoto();
+    $('#tryon-view').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (err) {
+    console.error(err);
+    tryonStatus(esc(/[가-힣]/.test(err.message) ? err.message : '찍은 사진을 분석하지 못했어요. 다시 찍어 주세요.'), 'err');
+  }
 }
 
 async function openLive() {
@@ -605,8 +736,10 @@ async function openLive() {
   tryon.live = { facing: 'user', lastHint: 0, lastHintText: '' };
   try {
     tryon.live.landmarker = await getLiveModel();
+    // 분할 모델은 없어도 카메라는 돈다(손을 옷 위로 올리는 것만 빠진다)
+    tryon.live.seg = await getLiveSegmenter().catch((err) => { console.error(err); return null; });
     tryon.live.stream = await startCamera(tryon.live.facing);
-    $('#live-hint').textContent = '전신이 보이게 서 주세요.';
+    $('#live-hint').textContent = '전신이 보이게 서 주세요. 마음에 드는 장면에서 "찍기"를 누르면 더 정밀하게 다시 그려요.';
     liveLoop();
   } catch (err) {
     console.error(err);
@@ -626,6 +759,7 @@ function closeLive() {
 
 $('#open-live').addEventListener('click', openLive);
 $('#live-close').addEventListener('click', closeLive);
+$('#live-shot').addEventListener('click', liveShot);
 $('#live-flip').addEventListener('click', async () => {
   const l = tryon.live;
   if (!l) return;

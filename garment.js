@@ -144,7 +144,18 @@
 
   // 사진 명암 지도: 줄인 사진에서 "주변보다 얼마나 어둡고 밝은지"만 남긴 회색 이미지(128 = 변화 없음).
   // 원래 입은 옷끼리의 큰 밝기 차이(흰 티 vs 진청 바지)는 지우고, 주름·그림자 같은 작은 명암만 새 옷에 옮긴다
+  let liveMode = false;     // 카메라(실시간): 가볍게 그린다
+  let shadeCache = null;   // 카메라에서 명암 지도를 몇 프레임 재사용
+  let shadeAge = 0;
   function shadingMap() {
+    // 카메라에서는 4프레임에 한 번만 새로(화면 픽셀 읽기가 GPU를 기다리게 해서 느리다. 주름은 그렇게 빨리 안 바뀐다)
+    if (liveMode && shadeCache && shadeCache.w === photo.width && ++shadeAge < 4) return shadeCache.c;
+    shadeAge = 0;
+    const c0 = shadingMapNow();
+    shadeCache = liveMode ? { c: c0, w: photo.width } : null;
+    return c0;
+  }
+  function shadingMapNow() {
     const W = photo.width, H = photo.height;
     const sw = Math.max(1, Math.min(360, Math.round(W / 2)));
     const sh = Math.max(1, Math.round((H * sw) / W));
@@ -475,7 +486,7 @@
     for (const p of dd) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
     const m = W * 0.04;
     x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(W, x1 + m); y1 = Math.min(H, y1 + m);
-    const step = Math.max(4, Math.round(Math.min(W, H) / 90));
+    const step = Math.max(4, Math.round(Math.min(W, H) / (liveMode ? 40 : 90))); // 카메라에서는 성글게(빠르게)
     const nx = Math.max(2, Math.ceil((x1 - x0) / step) + 1), ny = Math.max(2, Math.ceil((y1 - y0) / step) + 1);
     const verts = new Float32Array(nx * ny * 2), uvs = new Float32Array(nx * ny * 2);
     const iw = img.width, ih = img.height;
@@ -1670,6 +1681,7 @@
       pg.drawImage(ctx.canvas, 0, 0);
     }
     shadeK = opts.scene?.shadeK ?? 1;
+    liveMode = !!opts.live;
     // 팔을 들었거나 몸 앞을 가리면 옷 사진(팔 내린 모델)과 자세 차이가 커서, 하나로 휘면 몸판이 끌려간다 → 띠 방식
     armsFront = (opts.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross' || k === 'face');
     // 바지는 두 다리 사이 틈이 구불구불해져서 띠 방식이 낫다 → 상의에만 쓴다
