@@ -8,3 +8,14 @@
 | `depth_anything_v2_small_int8.onnx` (27MB) | 몸의 굴곡(깊이) 추정 → 옷에 입체 명암 | [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2) Small, [onnx-community 변환판](https://huggingface.co/onnx-community/depth-anything-v2-small) (`onnx/model_quantized.onnx`) | Apache-2.0 |
 
 실행기: [onnxruntime-web 1.20.1](https://www.npmjs.com/package/onnxruntime-web) (MIT), jsDelivr CDN에서 받아요.
+
+## 실사 3D 아바타 (`human/`)
+
+내 치수로 바꾸는 3D 인체 모델이에요. 브라우저(WebGL, [three.js 0.169.0](https://www.npmjs.com/package/three) MIT, jsDelivr CDN)에서 그려요.
+
+| 파일 | 용도 |
+|---|---|
+| `human.json`, `human.bin` (3MB) | 기본 몸 + 체형 변형(가슴·허리·엉덩이·허벅지·어깨·다리 길이 등) + 머리카락·눈썹·눈·신발 + 뼈 가중치 |
+| `skin.jpg`, `hair.png`, `eyebrow.png`, `lashes.png`, `eye.png`, `shoes.jpg` | 텍스처 |
+
+출처: [MakeHuman](https://github.com/makehumancommunity/makehuman) 자산, CC0 1.0(자세한 내용 `human/LICENSE.txt`). 변환: `tools/build_human.py`.

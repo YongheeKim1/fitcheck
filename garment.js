@@ -546,7 +546,8 @@
   }
   let useTPS = true; // draw()에서 자세에 따라 정한다(팔을 크게 들면 띠 방식이 낫다)
   let armsFront = false;
-  let lastHole = null; // 마지막으로 그린 장면의 메울 곳(tryon.js가 AI로 다시 메울 때 쓴다) // 팔이 몸 앞에 오는 자세(팔 듦·팔이 몸을 가림)
+  let lastHole = null; // 마지막으로 그린 장면의 메울 곳(tryon.js가 AI로 다시 메울 때 쓴다)
+  let lastGarment = null; // 마지막으로 그린 옷 레이어(투명 배경). 코디에서 먼저 입힌 옷 자리를 정확히 알 때 쓴다 // 팔이 몸 앞에 오는 자세(팔 듦·팔이 몸을 가림)
 
   // pairs: [{ src: 원본 띠, dst: 목표 띠 }]. 실측 크기로 휜 옷 사진에 내 사진 명암을 살짝 입히고 그림자와 함께 얹는다
   function paintTexture(ctx, img, pairs, folds) {
@@ -1258,6 +1259,7 @@
       gg2.restore();
     }
     finishGarment(G, W, H);
+    lastGarment = G;
     ctx.drawImage(G, 0, 0);
 
     // 손·팔뚝: 소매 안은 빼고 옷 위로
@@ -1938,6 +1940,7 @@
   function draw(ctx, opts) {
     // 옷을 그리기 전의 화면을 찍어 둔다(명암 지도용). 캔버스를 못 만드는 환경이면 건너뛴다
     photo = null;
+    lastGarment = null;
     if (canMakeCanvas && ctx.canvas) {
       photo = buf('photo', ctx.canvas.width, ctx.canvas.height);
       const pg = photo.getContext('2d');
@@ -1965,6 +1968,6 @@
     return res;
   }
 
-  root.GarmentRender = { draw, visW, walk, inpaint, lastHole: () => lastHole };
+  root.GarmentRender = { draw, visW, walk, inpaint, lastHole: () => lastHole, lastGarment: () => lastGarment };
   if (typeof module !== 'undefined') module.exports = root.GarmentRender;
 })(typeof window !== 'undefined' ? window : globalThis);

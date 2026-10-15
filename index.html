@@ -100,6 +100,7 @@
         </div>
         <div id="color-verdict" class="verdict-box"></div>
         <div class="btn-row">
+          <button type="button" class="ghost" id="tryon-avatar">아바타로 보기</button>
           <label class="ghost file-btn">사진으로 보기
             <input type="file" id="tryon-photo" accept="image/*" hidden>
           </label>
@@ -136,6 +137,12 @@
             <select id="outfit-bottom"></select>
           </label>
         </div>
+        <label class="field">모델
+          <select id="outfit-model">
+            <option value="avatar">내 아바타(치수로 그린 몸)</option>
+            <option value="photo">내 사진</option>
+          </select>
+        </label>
         <label class="field">입는 방식
           <select id="outfit-tuck">
             <option value="out">상의를 꺼내 입기</option>
@@ -308,6 +315,21 @@
 
       <div id="pc-result" class="card hidden"></div>
 
+      <div class="card" id="avatar-card">
+        <h2>내 아바타</h2>
+        <p class="hint">내 치수로 그린 몸이에요. 핏 비교와 옷장 코디에서 이 아바타에 옷을 입혀 볼 수 있어요(사진 없이 바로, 실측 그대로).</p>
+        <div id="avatar-view" class="avatar-view"></div>
+        <p class="hint" id="avatar-note"></p>
+        <div class="btn-row">
+          <label class="ghost file-btn">내 얼굴 넣기
+            <input type="file" id="avatar-face" accept="image/*" hidden>
+          </label>
+          <button type="button" class="ghost hidden" id="avatar-face-clear">얼굴 지우기</button>
+        </div>
+        <p class="hint">얼굴이 잘 보이는 정면 사진(셀카도 괜찮아요)을 고르면 얼굴과 머리카락만 오려 아바타에 넣어요. 옷이 내 얼굴과 어울리는지 볼 수 있어요. 이 기기에만 저장되고 서버로 보내지 않아요.</p>
+        <p class="hint import-status" id="avatar-status"></p>
+      </div>
+
       <form id="body-form" class="card">
         <h2>내 체형</h2>
         <p class="hint">줄자로 잰 <b>둘레(cm)</b>를 입력하면 옷과 몸 사이 여유분도 같이 보여 줘요. 어깨너비는 양 어깨 끝 사이 직선 길이예요. 비워 둬도 돼요.</p>
@@ -355,6 +377,8 @@
   <script src="app.js"></script>
   <script src="tryon.js"></script>
   <script src="models.js"></script>
+  <script src="avatar.js"></script>
+  <script src="avatar3d.js"></script>
   <script src="wardrobe.js"></script>
   <script src="garmentsource.js"></script>
   <script src="color.js"></script>

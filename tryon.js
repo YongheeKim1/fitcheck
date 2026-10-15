@@ -110,6 +110,7 @@ function onCompareResult() {
   if (!tryon.photoUploaded) {
     if (tryon.refPhoto) tryon.photo = tryon.refPhoto;
     else if (lastPhoto) tryon.photo = lastPhoto;
+    else if (!tryon.photo) tryon.photo = avatarPhoto(); // 사진이 없으면 내 아바타
     if (!tryon.refPhoto && !tryon.refLoading && !tryon.refChecked) loadRefPhoto();
   }
   if (tryon.photo) renderTryonPhoto();
@@ -344,7 +345,7 @@ async function aiFillHole(photo) {
 
 function renderTryonPhoto() {
   const { canvas, pose, pxPerCm, scene } = tryon.photo;
-  if (scene && aiEnabled() && !scene.depthStarted) enhanceScene(tryon.photo);
+  if (scene && aiEnabled() && !scene.depthStarted && !scene.isAvatar) enhanceScene(tryon.photo); // 아바타는 AI 보정이 필요 없다
   if (!scene && !tryon.photo.sceneLoading) {
     // 체형 탭에서 가져온 사진 등 아직 분석 안 된 사진: 분석이 끝나면 다시 그린다
     tryon.photo.sceneLoading = true;
@@ -364,9 +365,10 @@ function renderTryonPhoto() {
   const opts = garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm, scene: sceneForDraw || null, poseIssues: check.issues.map((i) => i.key) });
   if (opts.texture && scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, scene) };
   const res = GarmentRender.draw(ctx, opts);
-  if (scene && aiEnabled()) aiFillHole(tryon.photo); // 드러난 자리가 있으면 AI로 메운 뒤 다시 그린다
+  if (scene && aiEnabled() && !scene.isAvatar) aiFillHole(tryon.photo); // 드러난 자리가 있으면 AI로 메운 뒤 다시 그린다
   $('#tryon-view').replaceChildren(c);
   const notes = res.ok ? [...res.notes, bodySourceNote(opts.category)] : res.notes;
+  if (tryon.photo.isAvatar) notes.push(Avatar.sourceNote(tryon.photo.measures));
   $('#tryon-notes').innerHTML = notes.map((n) => `<li>${esc(n)}</li>`).join('');
   $('#size-compare-btn').classList.toggle('hidden', !res.ok || (lastResults?.results.length || 0) < 2);
   if (!$('#size-compare').classList.contains('hidden')) renderSizeCompare(); // 비교를 펼쳐 둔 상태면 같이 갱신
@@ -375,6 +377,46 @@ function renderTryonPhoto() {
   else tryonStatus(tryon.photo === tryon.refPhoto ? '저장해 둔 기준 사진으로 입혀 봤어요.' : '');
   updateRefUI();
 }
+
+// 내 아바타(avatar.js): 치수로 그린 몸을 "사진"처럼 쓴다. 치수가 바뀌면 다시 그린다
+function avatarPhoto() {
+  if (typeof Avatar === 'undefined') return null;
+  const face = typeof avatarFace !== 'undefined' ? avatarFace.data : null; // avatar.js: 내 얼굴(이 기기에만)
+  const key = JSON.stringify([state.body, usableAnalysis()?.girths, usableAnalysis()?.heads, state.personalColor?.skin?.hex, state.personalColor?.hair?.hex, !!face]);
+  if (tryon.avatar?.key !== key) {
+    tryon.avatar = { key, photo: Avatar.build(state, usableAnalysis(), state.personalColor, face) };
+  }
+  if (!tryon.avatar.pending && typeof Avatar3D !== 'undefined') tryon.avatar.pending = buildAvatar3D(key);
+  return tryon.avatar.photo3d || tryon.avatar.photo;
+}
+
+// 실사 3D 아바타(avatar3d.js): 처음엔 2D 그림을 보여 주고, 3D가 다 그려지면 바꾼다(모델 첫 다운로드 약 4.5MB)
+async function buildAvatar3D(key) {
+  try {
+    const p = await Avatar3D.build(state, usableAnalysis(), state.personalColor);
+    if (tryon.avatar?.key !== key) return;
+    const old = tryon.avatar.photo;
+    tryon.avatar.photo3d = p;
+    if (tryon.photo === old) { tryon.photo = p; renderTryonPhoto(); }
+    if (typeof renderAvatarCard === 'function') renderAvatarCard();
+  } catch (err) {
+    console.error('3D 아바타를 그리지 못해 2D 아바타를 써요', err);
+  }
+}
+
+// 3D가 준비될 때까지 기다린 아바타(실패하면 2D)
+async function avatarPhotoReady() {
+  avatarPhoto();
+  if (tryon.avatar?.pending) await tryon.avatar.pending;
+  return avatarPhoto();
+}
+
+$('#tryon-avatar').addEventListener('click', () => {
+  if (!lastResults) return;
+  tryon.photo = avatarPhoto();
+  tryon.photoUploaded = true;
+  renderTryonPhoto();
+});
 
 // 사진(파일·Blob) → 입혀 보기용 { canvas, pose, pxPerCm, scene, poseCheck }
 async function analyzeTryonPhoto(file) {
@@ -529,7 +571,7 @@ function loadRefPhoto() {
 
 function updateRefUI() {
   const p = tryon.photo;
-  const canSave = !!p && p !== tryon.refPhoto;
+  const canSave = !!p && p !== tryon.refPhoto && !p.isAvatar; // 아바타는 저장할 필요 없음
   const bad = !!(p?.poseCheck && !p.poseCheck.ok);
   $('#ref-photo').classList.toggle('hidden', !canSave && !tryon.refSaved);
   $('#ref-save').classList.toggle('hidden', !canSave);

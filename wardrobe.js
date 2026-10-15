@@ -115,6 +115,7 @@ async function garmentCut(p) {
 
 // 모델 사진: 직접 고른 사진 > 저장한 기준 사진 > 핏 비교에서 쓰던 사진 > 체형 탭 사진
 async function outfitModel() {
+  if ($('#outfit-model').value === 'avatar') return avatarPhotoReady(); // tryon.js
   if (wardrobe.model) return wardrobe.model;
   const ref = tryon.refPhoto || await loadRefPhoto();
   return ref || tryon.photo || lastPhoto || null;
@@ -129,6 +130,7 @@ $('#outfit-photo').addEventListener('change', async (e) => {
     outfitStatus('사진 분석 중…');
     wardrobe.model = await analyzeTryonPhoto(file);
     wardrobe.patches.clear();
+    $('#outfit-model').value = 'photo';
     runOutfit();
   } catch (err) {
     console.error(err);
@@ -204,19 +206,18 @@ function comboAdvice(a, b) {
   return hue + light;
 }
 
-// 첫 번째 옷을 그린 자리는 두 번째 옷을 그릴 때 "원래 입던 옷"으로 지우지 않도록 라벨을 바꾼다(4 → 7)
-function markDrawn(scene, before, after, W, H) {
+// 첫 번째 옷을 그린 자리는 두 번째 옷을 그릴 때 "원래 입던 옷"으로 지우지 않도록 라벨을 바꾼다(→ 7).
+// 자리는 방금 그린 옷 레이어의 투명도로 정한다(그리기 전후 차이로 정하면 머리 가장자리 같은 미세한 변화까지 옷으로 잡힌다)
+function markDrawn(scene, layer, W, H) {
   const cat = Uint8Array.from(scene.cat);
   const { w, h } = scene;
-  const a = before.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
-  const b = after.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+  if (!layer) return { ...scene, cat, aiPatch: null };
+  const a = layer.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
   for (let y = 0; y < h; y++) {
     const py = Math.min(H - 1, Math.floor(((y + 0.5) * H) / h));
     for (let x = 0; x < w; x++) {
       const px = Math.min(W - 1, Math.floor(((x + 0.5) * W) / w));
-      const i = (py * W + px) * 4;
-      const diff = Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
-      if (diff > 30) cat[y * w + x] = 7; // 새로 입힌 옷
+      if (a[(py * W + px) * 4 + 3] > 128) cat[y * w + x] = 7; // 새로 입힌 옷
     }
   }
   return { ...scene, cat, aiPatch: null };
@@ -272,7 +273,7 @@ async function runOutfit() {
     // AI 보정을 꺼 두었으면 입체 명암도 쓰지 않는다
     let scene = model.scene && !aiEnabled() ? { ...model.scene, depthShade: null, aiPatch: null } : model.scene;
     if (scene && aiEnabled()) scene = { ...scene, aiPatches: wardrobe.patches };
-    if (scene && aiEnabled() && !scene.depthShade && typeof AIModels !== 'undefined' && !model.depthStarted) {
+    if (scene && aiEnabled() && !scene.depthShade && !scene.isAvatar && typeof AIModels !== 'undefined' && !model.depthStarted) {
       // 입체 명암은 사진마다 한 번(끝나면 다시 그린다)
       model.depthStarted = true;
       AIModels.depthShade(model.canvas, model.scene).then((d) => { model.scene.depthShade = d; runOutfit(); })
@@ -305,7 +306,7 @@ async function runOutfit() {
       if (!res.ok) { notes.push(`${label}: ${res.notes.join(' ')}`); continue; }
       notes.push(...res.notes.map((n) => `${label}: ${n}`));
       if (!cut) notes.push(`${label}: 옷 사진이 없어서 단색으로 그렸어요. 옷장에서 사진을 넣으면 그 옷 그대로 입혀 봐요.`);
-      if (scene) scene = markDrawn(scene, before, c, W, H);
+      if (scene) scene = markDrawn(scene, GarmentRender.lastGarment(), W, H);
     }
     $('#outfit-view').replaceChildren(c);
     if (tuckIn && top && bottom && !tuck) notes.push('상의가 짧아서 바지 허리까지 오지 않아요(넣어 입을 필요가 없는 기장이에요).');
@@ -313,7 +314,7 @@ async function runOutfit() {
     renderOutfitColor(top && cuts.top?.avgColor, bottom && cuts.bottom?.avgColor);
     const advice = model.poseCheck.ok ? '' : `${model.poseCheck.issues.map((i) => i.text).join(', ')}. 정면으로 서서 팔을 내린 사진이 가장 정확해요.`;
     outfitStatus(advice || (model === tryon.refPhoto ? '저장해 둔 기준 사진에 입혀 봤어요.' : ''), advice ? 'warn' : '');
-    if (holes.length && aiEnabled()) fillOutfitHoles(holes);
+    if (holes.length && aiEnabled() && !model.isAvatar) fillOutfitHoles(holes);
   } catch (err) {
     console.error(err);
     outfitStatus('입혀 보지 못했어요. 다시 시도해 주세요.', 'err');
@@ -441,6 +442,7 @@ async function outfitShot(blob) {
     outfitStatus('찍은 사진 분석 중…');
     wardrobe.model = await analyzeTryonPhoto(blob);
     wardrobe.patches.clear();
+    $('#outfit-model').value = 'photo';
     await runOutfit();
     $('#outfit').scrollIntoView({ behavior: 'smooth' });
   } catch (err) {

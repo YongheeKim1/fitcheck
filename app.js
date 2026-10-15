@@ -135,6 +135,7 @@ function renderBodyForm() {
       <input type="number" inputmode="decimal" step="0.1" name="${f.key}" value="${state.body[f.key] ?? ''}">
     </label>`).join('');
   $('#an-height').value = state.body.height ?? '';
+  if (typeof renderAvatarCard === 'function') renderAvatarCard(); // avatar.js
 }
 
 $('#body-form').addEventListener('submit', (e) => {
@@ -146,6 +147,7 @@ $('#body-form').addEventListener('submit', (e) => {
   }
   state.body = body;
   saveState();
+  if (typeof renderAvatarCard === 'function') renderAvatarCard();
   const msg = $('#body-saved');
   msg.classList.remove('hidden');
   setTimeout(() => msg.classList.add('hidden'), 1500);

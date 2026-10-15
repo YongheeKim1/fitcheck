@@ -1,0 +1,9 @@
+3D 인체 모델(human.bin/json)과 텍스처(skin, hair, eyebrow, lashes, eye, shoes)는
+MakeHuman 프로젝트 자산을 변환한 것입니다. MakeHuman 기본 메시·타깃·스킨·프록시·뼈대 자산은
+CC0 1.0 Universal(퍼블릭 도메인)로 공개되어 있습니다.
+
+- 기본 메시·타깃·뼈대: https://github.com/makehumancommunity/makehuman (makehuman/data, license.txt의 "C. The license for the bundled assets")
+- 피부·머리카락·눈썹·속눈썹·눈·신발: MakeHuman 시스템 자산(skins/young_lightskinned_male_diffuse3, hair/short02,
+  eyebrows/eyebrow001, eyelashes/eyelashes01, eyes/brownlight, clothes/shoes05)
+
+변환 스크립트: tools/build_human.py

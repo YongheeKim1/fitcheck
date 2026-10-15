@@ -226,6 +226,7 @@ button.block { width: 100%; }
 .size-compare figcaption { font-size: 13px; text-align: center; margin-top: 4px; }
 .size-compare figcaption b { display: block; font-size: 15px; }
 .size-compare .best { color: var(--ok); }
+.avatar-view canvas { display: block; width: min(100%, 260px); height: auto; margin: 6px auto; border-radius: 12px; }
 #outfit-view canvas { width: 100%; height: auto; border-radius: 12px; margin-top: 8px; display: block; }
 .ref-photo { margin-top: 8px; }
 .progress { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 8px; }
