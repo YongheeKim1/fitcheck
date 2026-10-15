@@ -291,18 +291,27 @@ const Avatar3D = (() => {
       for (let s = 3; s >= 2; s--) rotSeg(`finger1-${s}.${sd}`, curl.thumb[s - 1], bend);
       rotSeg(`finger1-1.${sd}`, curl.thumb[0] * (sd === 'L' ? 1 : -1), () => d);
       rotSeg(`finger1-1.${sd}`, curl.thumbIn * (sd === 'L' ? 1 : -1), () => pn);
+      // 손 크기: 아래팔에 비해 커 보이던 손을 손목 기준으로 조금 줄인다
+      if (curl.scale && curl.scale !== 1) {
+        const W = data.w['hand' + sd];
+        for (let i = 0; i < W.length; i++) {
+          const w = W[i] / 255; if (!w) continue;
+          const f = 1 - (1 - curl.scale) * w;
+          for (let k = 0; k < 3; k++) P[i * 3 + k] = wr[k] + (P[i * 3 + k] - wr[k]) * f;
+        }
+      }
     }
     return P;
   }
   const FACE = {
-    'lowerlip-vol': -0.7, 'lowerlip-h': -0.3, 'mouth-angle': 0.3, 'mouth-w': -0.1,
+    'lowerlip-vol': -0.7, 'lowerlip-h': -0.3, 'lowerlip-mid': 0.8, 'upperlip-mid': -0.6, 'mouth-angle': 0.3, 'mouth-w': -0.1,
     'chin-prom': 0.25, 'chin-w': -0.45, 'head-fat': -0.5, 'head-oval': 0,
     'cheek-vol': -0.25, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.15, 'eye-bag': -0.4, 'eye-scale': 0.05,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.8, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35 };
-  const HAND_CURL = { palmSign: -1, seg: [10, 25, 12], more: 2, close: 3, thumb: [0, 10, 10], thumbIn: -60 };
+  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -15, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35 };
+  const HAND_CURL = { palmSign: -1, seg: [8, 18, 10], more: 1.5, close: 3, thumb: [0, 8, 8], thumbIn: -55, scale: 0.95 };
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
   function normals(P) {
@@ -396,7 +405,7 @@ const Avatar3D = (() => {
         for (let i = 0; i < n; i++) {
           const d = (S[i * 3] - P[i * 3]) * N[i * 3] + (S[i * 3 + 1] - P[i * 3 + 1]) * N[i * 3 + 1] + (S[i * 3 + 2] - P[i * 3 + 2]) * N[i * 3 + 2];
           // 큰 굴곡은 얼굴(눈두덩·콧방울·입꼬리)에만 진하게: 몸통에 쓰면 가슴·쇄골에 멍처럼 얼룩진다
-          const wgt = it === 3 ? 0.15 + 0.3 * (hw[i] / 255) : 0.03 + 0.47 * (hw[i] / 255);
+          const wgt = it === 3 ? 0.15 + 0.3 * (hw[i] / 255) : 0.03 + 0.34 * (hw[i] / 255);
           out[i] += Math.max(0, Math.min(1, d / sc)) * wgt;
         }
       }
@@ -597,11 +606,11 @@ const Avatar3D = (() => {
       let mat;
       if (p.kind === 'hair') {
         const ht = hairRGB.map((v, i) => Math.max(0.05, Math.min(2.5, v / Math.max(8, data.hairAvg[p.name][i]))));
-        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], ...(p.name === 'short02' && POSE.hairNormal ? { normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(POSE.hairNormal, POSE.hairNormal) } : {}), ...(POSE.hairBump ? { bumpMap: strandTex(), bumpScale: POSE.hairBump } : {}), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, specularIntensity: 0.35, sheen: 0.35, sheenRoughness: 0.4, sheenColor: new THREE.Color(0.4, 0.32, 0.26), alphaTest: 0.55, side: THREE.DoubleSide });
+        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], ...(p.name === 'short02' && POSE.hairNormal ? { normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(POSE.hairNormal, POSE.hairNormal) } : {}), ...(POSE.hairBump ? { bumpMap: strandTex(), bumpScale: POSE.hairBump } : {}), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, specularIntensity: 0.35, sheen: 0.35, sheenRoughness: 0.4, sheenColor: new THREE.Color(0.4, 0.32, 0.26), alphaTest: 0.55, alphaToCoverage: true, side: THREE.DoubleSide });
       } else if (p.kind === 'brow' || p.kind === 'lash') {
-        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(Math.min(1, hairRGB[0] / 255 * 1.5), Math.min(1, hairRGB[1] / 255 * 1.5), Math.min(1, hairRGB[2] / 255 * 1.5)).convertSRGBToLinear() : new THREE.Color(0.06, 0.05, 0.045), roughness: 0.8, ...(p.kind === 'lash' && POSE.lashOpaque ? { alphaTest: 0.4 } : { transparent: true, opacity: 1, alphaTest: 0.05, depthWrite: false }), side: THREE.DoubleSide });
+        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(Math.min(1, hairRGB[0] / 255 * 1.5), Math.min(1, hairRGB[1] / 255 * 1.5), Math.min(1, hairRGB[2] / 255 * 1.5)).convertSRGBToLinear() : new THREE.Color(0.06, 0.05, 0.045), roughness: 0.8, ...(p.kind === 'lash' && POSE.lashOpaque ? { alphaTest: 0.4 } : { transparent: true, opacity: p.kind === 'brow' ? 0.78 : 1, alphaTest: 0.05, depthWrite: false }), side: THREE.DoubleSide });
       } else if (p.kind === 'eye') {
-        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 3, transparent: true, alphaTest: 0.02 }); // 소프트박스가 눈에 비친 반짝임
+        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.8, transparent: true, alphaTest: 0.02 }); // 소프트박스가 눈에 비친 반짝임
       } else {
         mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], roughness: 0.7 });
       }
@@ -615,7 +624,7 @@ const Avatar3D = (() => {
       if (p.kind !== 'shoes') headParts.push(mesh);
       if (p.kind === 'hair') {
         // 머리카락 끝(반투명한 가닥)은 섞어 그려 앞머리 끝이 톱니처럼 잘리지 않고 가늘게 흩어지게
-        const soft = new THREE.Mesh(g, Object.assign(mat.clone(), { alphaTest: 0.04, transparent: true, depthWrite: false }));
+        const soft = new THREE.Mesh(g, Object.assign(mat.clone(), { alphaTest: 0.04, transparent: true, depthWrite: false, alphaToCoverage: false }));
         soft.userData.kind = 'hair'; soft.renderOrder = 3; soft.receiveShadow = true;
         scene.add(soft); headParts.push(soft);
         // 털 껍질: 머리카락 겉에 가닥 무늬로 듬성듬성 뚫린 얇은 막을 몇 겹 씌워 윤곽이 매끈한 덩어리(헬멧)가 아니라 보송하게
@@ -627,7 +636,7 @@ const Avatar3D = (() => {
             const gk = g.clone(), pk = gk.attributes.position.array;
             for (let i = 0; i < pk.length; i++) pk[i] = pos[i] + nor[i] * off;
             gk.attributes.position.needsUpdate = true;
-            const mk = Object.assign(mat.clone(), { alphaMap: strandTex(), alphaTest: 0.3 + 0.12 * k, transparent: false });
+            const mk = Object.assign(mat.clone(), { alphaMap: strandTex(), alphaTest: 0.3 + 0.12 * k, transparent: false, alphaToCoverage: true });
             mk.color = mat.color.clone().multiplyScalar(1 + 0.08 * k); // 바깥 가닥이 빛을 조금 더 받는다
             const sh = new THREE.Mesh(gk, mk);
             sh.userData.kind = 'hair'; sh.renderOrder = 1; sh.receiveShadow = true;

@@ -2085,13 +2085,61 @@
       gg.closePath(); gg.fill();
       gg.restore();
       // 허리 밴드 바로 위 살에 지는 얇은 그늘(밴드가 살을 살짝 누른다)
-      gg.save();
-      gg.globalCompositeOperation = 'destination-over';
-      gg.filter = `blur(${0.7 * s}px)`;
-      gg.strokeStyle = 'rgba(40,25,20,0.22)';
-      gg.lineWidth = 1.4 * s;
-      gg.beginPath(); gg.moveTo(wl.l.x + 1.5 * s, wl.l.y - 0.3 * s); gg.quadraticCurveTo(c.x, c.y - 0.6 * s, wl.r.x - 1.5 * s, wl.r.y - 0.3 * s); gg.stroke();
-      gg.restore();
+      // 그늘은 몸 위에만(배경으로 번진 회색 얼룩이 생기지 않게)
+      const sh = buf('waistShadow', W, H), shg = sh.getContext('2d');
+      shg.setTransform(1, 0, 0, 1, 0, 0); shg.globalCompositeOperation = 'source-over'; shg.clearRect(0, 0, W, H);
+      shg.filter = `blur(${0.7 * s}px)`;
+      shg.strokeStyle = 'rgba(40,25,20,0.22)';
+      shg.lineWidth = 1.4 * s;
+      shg.beginPath(); shg.moveTo(wl.l.x + 1.5 * s, wl.l.y - 0.3 * s); shg.quadraticCurveTo(c.x, c.y - 0.6 * s, wl.r.x - 1.5 * s, wl.r.y - 0.3 * s); shg.stroke();
+      shg.filter = 'none'; shg.globalCompositeOperation = 'destination-in'; shg.drawImage(avatarBody, 0, 0, W, H);
+      shg.globalCompositeOperation = 'source-over';
+      gg.save(); gg.globalCompositeOperation = 'destination-over'; gg.drawImage(sh, 0, 0); gg.restore();
+    }
+  }
+
+  // 아바타 옷 조명: 붙여 넣은 사진처럼 평평하지 않게
+  // 1) 옷 실루엣 가장자리(몸통 옆·소매 바깥·겨드랑이)로 갈수록 어둡게(둥근 몸을 감싼 천)
+  // 2) 3D 몸을 같은 조명으로 그린 명암(depthShade, 128 = 그대로)을 소프트 라이트로: 밝은 쪽은 밝게, 그늘은 어둡게(검은 천에도 보이게)
+  function avatarGarmentLight(G, scene, geo) {
+    const W = G.width, H = G.height, s = geo.s || W / 200;
+    const gg = G.getContext('2d', { willReadFrequently: true });
+    const k = 4, sw = Math.max(1, Math.round(W / k)), sh = Math.max(1, Math.round(H / k));
+    const sm = buf('litSmall', sw, sh), sg = sm.getContext('2d', { willReadFrequently: true });
+    sg.setTransform(1, 0, 0, 1, 0, 0); sg.globalCompositeOperation = 'source-over'; sg.filter = 'none';
+    sg.clearRect(0, 0, sw, sh);
+    sg.drawImage(G, 0, 0, sw, sh);
+    const ad = sg.getImageData(0, 0, sw, sh).data;
+    const A = new Float32Array(sw * sh);
+    for (let i = 0; i < A.length; i++) A[i] = ad[i * 4 + 3] / 255;
+    // 상자 흐림 두 번(반지름 약 4cm): 가장자리에서 안쪽으로 갈수록 1에 가까워진다
+    const r = Math.max(2, Math.round((4 * s) / k));
+    const blur = (src) => {
+      const t = new Float32Array(src.length), o = new Float32Array(src.length);
+      for (let y = 0; y < sh; y++) { let acc = 0; for (let x = -r; x <= r; x++) acc += src[y * sw + Math.min(sw - 1, Math.max(0, x))]; for (let x = 0; x < sw; x++) { t[y * sw + x] = acc / (2 * r + 1); acc += src[y * sw + Math.min(sw - 1, x + r + 1)] - src[y * sw + Math.max(0, x - r)]; } }
+      for (let x = 0; x < sw; x++) { let acc = 0; for (let y = -r; y <= r; y++) acc += t[Math.min(sh - 1, Math.max(0, y)) * sw + x]; for (let y = 0; y < sh; y++) { o[y * sw + x] = acc / (2 * r + 1); acc += t[Math.min(sh - 1, y + r + 1) * sw + x] - t[Math.max(0, y - r) * sw + x]; } }
+      return o;
+    };
+    const B = blur(blur(A));
+    const img = sg.createImageData(sw, sh), d = img.data;
+    for (let i = 0; i < A.length; i++) {
+      const edge = Math.max(0, Math.min(1, (0.85 - B[i]) / 0.45)); // 0 = 안쪽, 1 = 가장자리
+      const v = Math.round(255 * (1 - 0.32 * edge));
+      d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = Math.round(v * 0.98 + 5 * edge); d[i * 4 + 3] = 255;
+    }
+    sg.putImageData(img, 0, 0);
+    const L = buf('litLayer', W, H), lg = L.getContext('2d');
+    lg.setTransform(1, 0, 0, 1, 0, 0); lg.globalCompositeOperation = 'source-over';
+    lg.clearRect(0, 0, W, H);
+    lg.imageSmoothingEnabled = true; lg.imageSmoothingQuality = 'high';
+    lg.drawImage(sm, 0, 0, W, H);
+    lg.globalCompositeOperation = 'destination-in'; lg.drawImage(G, 0, 0);
+    gg.save(); gg.globalCompositeOperation = 'multiply'; gg.drawImage(L, 0, 0); gg.restore();
+    if (scene?.depthShade) {
+      lg.globalCompositeOperation = 'source-over'; lg.clearRect(0, 0, W, H);
+      lg.drawImage(scene.depthShade, 0, 0, W, H);
+      lg.globalCompositeOperation = 'destination-in'; lg.drawImage(G, 0, 0);
+      gg.save(); gg.globalCompositeOperation = 'soft-light'; gg.globalAlpha = 0.9; gg.drawImage(L, 0, 0); gg.restore();
     }
   }
 
@@ -2128,7 +2176,7 @@
     gg.setTransform(1, 0, 0, 1, 0, 0);
     gg.clearRect(0, 0, G.width, G.height);
     const res = drawFn(gg, opts);
-    if (res.ok && avatarBody) avatarGarmentShape(G, res.geo);
+    if (res.ok && avatarBody) { avatarGarmentShape(G, res.geo); avatarGarmentLight(G, opts.scene, res.geo); }
     if (res.ok) composeScene(ctx, G, opts.scene, res.geo);
     return res;
   }

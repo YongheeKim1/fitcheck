@@ -64,6 +64,8 @@ FACE = {
     'lowerlip-h': ('mouth-lowerlip-height-incr', 'mouth-lowerlip-height-decr'),
     'mouth-angle': ('mouth-angles-up', 'mouth-angles-down'),
     'mouth-w': ('mouth-scale-horiz-incr', 'mouth-scale-horiz-decr'),
+    'lowerlip-mid': ('mouth-lowerlip-middle-up', 'mouth-lowerlip-middle-down'),
+    'upperlip-mid': ('mouth-upperlip-middle-up', 'mouth-upperlip-middle-down'),
     'chin-prom': ('chin-prominent-incr', 'chin-prominent-decr'),
     'chin-w': ('chin-width-incr', 'chin-width-decr'),
     'head-fat': ('head-fat-incr', 'head-fat-decr'),
@@ -362,6 +364,7 @@ def even_skin(src, dst):
     # 입술은 원래 색 비율이 커서 저주파도 살짝 붉게 남긴다
     lip = ell(1866, 1060, 40, 52)[..., None]
     out = out * (1 - lip * 0.5) + (a * target / np.median(low[1000:1120, 1700:1800].reshape(-1, 3), axis=0)) * lip * 0.5
+    out = out * (1 + lip * np.array([0.06, -0.03, -0.02], np.float32))  # 입술 혈색 조금 더
     Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), quality=88, optimize=True)
 
 def dark_iris(src, dst, size):
@@ -377,7 +380,7 @@ def dark_iris(src, dst, size):
         iris[..., 0] = np.maximum(iris[..., 0], np.clip((60 - d) / 4, 0, 1))
     mean = (rgb * iris).reshape(-1, 3).sum(0) / iris.sum()
     dark = rgb * (np.array([62, 38, 24], np.float32) / mean)  # 결은 남기고 짙은 갈색으로
-    sclera = np.minimum(255, rgb * 1.06 + 6)  # 흰자는 조금 더 맑게
+    sclera = np.minimum(255, rgb * 0.55 + np.array([233, 228, 222], np.float32) * 0.5)  # 흰자: 푸른 회색 대신 따뜻한 미색
     a[..., :3] = dark * iris + sclera * (1 - iris)
     Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), optimize=True)
 
@@ -424,9 +427,9 @@ def clean_shoes(src, dst, size):
     im = Image.open(P(src)).convert('RGB').resize((size, size), Image.LANCZOS)
     a = np.asarray(im).astype(np.float32)
     r, g, b = a[..., 0], a[..., 1], a[..., 2]
-    green = np.clip((g - np.maximum(r, b) - 15) / 30, 0, 1)[..., None]
-    lum = (r * 0.3 + g * 0.55 + b * 0.15)[..., None]
-    a = a * (1 - green) + np.repeat(lum * 0.8, 3, -1) * green
+    # 색은 모두 빼고(초록 포인트 없음), 어두운 판·밑창·때를 밝은 회색으로 올려 깨끗한 흰 운동화로
+    lum = (r * 0.3 + g * 0.45 + b * 0.25)[..., None]
+    a = np.repeat(np.clip(118 + lum * 0.56, 0, 255), 3, -1) * np.array([1.0, 0.995, 0.985])
     f = size / 512
     y0, x0 = int(430 * f), int(388 * f)
     sock = a[y0:, x0:]
