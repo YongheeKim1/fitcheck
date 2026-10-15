@@ -136,6 +136,74 @@ $('#outfit-photo').addEventListener('change', async (e) => {
   }
 });
 
+// 넣어 입기용 상의 치수: 바지 허리선(밑위로 정한 위치) 아래 4cm까지만 내려오고(나머지는 바지 속), 밑단 폭은 바지 허리 + 2cm로 모은다.
+// 상의가 원래 그보다 짧으면 null(넣어 입을 필요 없음). 계산은 garment.js의 바지·상의 위치 정하는 방식과 같다
+function tuckRow(model, top, bottom, waistTop) {
+  const row = itemRow(top);
+  if (row.length == null || bottom.rise == null) return null;
+  const { pose, pxPerCm: s } = model;
+  const W = model.canvas.width, H = model.canvas.height;
+  const P = (i) => ({ x: pose[i].x * W, y: pose[i].y * H });
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const norm = (v) => { const l = Math.hypot(v.x, v.y) || 1; return { x: v.x / l, y: v.y / l }; };
+  const M = mid(P(11), P(12)), hip = mid(P(23), P(24)), knee = mid(P(25), P(26));
+  const uLeg = norm({ x: knee.x - hip.x, y: knee.y - hip.y });
+  const thigh = Math.hypot(knee.x - hip.x, knee.y - hip.y);
+  // 바지 허리 위(T) = 가랑이(골반 관절 + 허벅지 길이 10%) - 밑위
+  const C = { x: hip.x + uLeg.x * thigh * 0.1, y: hip.y + uLeg.y * thigh * 0.1 };
+  // 바지가 실제로 그려지기 시작하는 곳(상품 사진에서 허리가 가려졌으면 허리선보다 아래). 모르면 허리선
+  const T = waistTop || { x: C.x - uLeg.x * bottom.rise * s, y: C.y - uLeg.y * bottom.rise * s };
+  const uTop = norm({ x: hip.x - M.x, y: hip.y - M.y });
+  const HPS = { x: M.x - uTop.x * 4 * s, y: M.y - uTop.y * 4 * s };
+  const toWaist = ((T.x - HPS.x) * uTop.x + (T.y - HPS.y) * uTop.y) / s;
+  const len = toWaist + 4;
+  if (row.length <= len) return null;
+  row.length = Math.round(len * 10) / 10;
+  if (bottom.waist != null) row.hem = Math.min(row.hem ?? row.chest ?? Infinity, bottom.waist + 2);
+  return row;
+}
+
+// ---------- 코디 색 조언: 퍼스널 컬러(color.js)와 위아래 색 조합 ----------
+function renderOutfitColor(topHex, bottomHex) {
+  const box = $('#outfit-color');
+  if (!topHex && !bottomHex) { box.innerHTML = ''; return; }
+  const lines = [];
+  const pc = state.personalColor;
+  const LABEL = { good: '잘 어울림', ok: '무난', caution: '주의' };
+  const CLS = { good: 'ok', ok: 'warn', caution: 'bad' };
+  for (const [name, hex] of [['상의', topHex], ['하의', bottomHex]]) {
+    if (!hex) continue;
+    if (!pc) continue;
+    const r = PersonalColor.evaluate(hex, pc);
+    // 하의는 얼굴에서 멀어 퍼스널 컬러 영향이 작다
+    const note = name === '하의' && r.verdict === 'caution' ? ' 하의는 얼굴에서 멀어서 영향이 크지 않아요.' : '';
+    lines.push(`<li><span class="color-dot" style="background:${hex}"></span><b>${name}</b> <span class="badge ${CLS[r.verdict]}">${LABEL[r.verdict]} ${r.score}점</span> ${esc(r.reasons[0] || '')}${esc(note)}</li>`);
+  }
+  if (topHex && bottomHex) lines.push(`<li>${esc(comboAdvice(topHex, bottomHex))}</li>`);
+  if (!pc) lines.push('<li class="hint">내 체형 탭에서 퍼스널 컬러를 분석하면 옷 색이 나에게 어울리는지도 알려 줘요.</li>');
+  box.innerHTML = `<p class="hint" style="margin:8px 0 4px">코디 색</p><ul class="note-list">${lines.join('')}</ul>`;
+}
+
+// 위아래 색 조합: 밝기 대비와 색상 관계(같은 계열 / 보색 / 무채색)
+function comboAdvice(a, b) {
+  const la = PersonalColor.hexToLab(a), lb = PersonalColor.hexToLab(b);
+  const ca = PersonalColor.lch(la), cb = PersonalColor.lch(lb);
+  const dL = Math.abs(la.L - lb.L);
+  const grayA = ca.C < 10, grayB = cb.C < 10;
+  let hue;
+  if (grayA && grayB) hue = '둘 다 무채색이라 차분하고 실패 없는 조합이에요.';
+  else if (grayA || grayB) hue = '한쪽이 무채색이라 다른 색이 자연스럽게 살아나요.';
+  else {
+    const dh = Math.abs(((ca.h - cb.h + 540) % 360) - 180); // 0 = 같은 색상, 180 = 정반대
+    hue = dh < 35 ? '같은 계열 색(톤온톤)이라 정돈돼 보여요.'
+      : dh > 140 ? '보색에 가까운 대비 조합이에요. 한쪽 채도를 낮추면 더 안정적이에요.'
+      : '서로 다른 계열 색이라 경쾌한 느낌이에요.';
+  }
+  const light = dL < 12 ? ' 위아래 밝기가 비슷해 한 벌처럼 이어져 보여요(키가 커 보이는 효과).'
+    : dL > 45 ? ' 위아래 밝기 차이가 커서 허리선이 또렷하게 나뉘어 보여요.' : '';
+  return hue + light;
+}
+
 // 첫 번째 옷을 그린 자리는 두 번째 옷을 그릴 때 "원래 입던 옷"으로 지우지 않도록 라벨을 바꾼다(4 → 7)
 function markDrawn(scene, before, after, W, H) {
   const cat = Uint8Array.from(scene.cat);
@@ -182,7 +250,24 @@ async function runOutfit() {
     const ctx = c.getContext('2d');
     ctx.drawImage(model.canvas, 0, 0);
     // 꺼내 입기: 바지 먼저, 그 위에 상의 / 넣어 입기: 상의 먼저, 그 위에 바지
-    const order = $('#outfit-tuck').value === 'in' ? [top, bottom] : [bottom, top];
+    const tuckIn = $('#outfit-tuck').value === 'in';
+    const order = tuckIn ? [top, bottom] : [bottom, top];
+    // 넣어 입기: 바지를 먼저 시험 삼아 그려 실제로 그려지는 허리 위치를 알아낸 뒤, 상의가 거기까지 내려와 바지 속으로 들어가게
+    let waistTop = null;
+    if (tuckIn && top && bottom) {
+      const tmp = document.createElement('canvas');
+      tmp.width = model.canvas.width; tmp.height = model.canvas.height;
+      const tctx = tmp.getContext('2d');
+      tctx.drawImage(model.canvas, 0, 0);
+      const cut = cuts.bottom;
+      const r0 = GarmentRender.draw(tctx, {
+        category: 'bottom', g: itemRow(bottom), color: DEFAULT_COLOR.bottom, stretch: bottom.stretch, body: bodyForRender(),
+        texture: cut && cut.category === 'bottom' ? cut : null,
+        lm: model.pose, W: tmp.width, H: tmp.height, mirror: false, pxPerCm: model.pxPerCm, scene: null,
+      });
+      waistTop = r0.ok ? r0.waistTop : null;
+    }
+    const tuck = tuckIn && top && bottom ? tuckRow(model, top, bottom, waistTop) : null;
     // AI 보정을 꺼 두었으면 입체 명암도 쓰지 않는다
     let scene = model.scene && !aiEnabled() ? { ...model.scene, depthShade: null, aiPatch: null } : model.scene;
     if (scene && aiEnabled()) scene = { ...scene, aiPatches: wardrobe.patches };
@@ -203,7 +288,8 @@ async function runOutfit() {
       const texture = cut && cut.category === p.category ? { ...cut, texture: scene ? harmonizedTexture(cut, scene) : cut.texture } : null;
       const res = GarmentRender.draw(ctx, {
         category: p.category,
-        g: itemRow(p),
+        g: p.category === 'top' && tuck ? tuck : itemRow(p),
+        tucked: p.category === 'top' && !!tuck,
         color: cut?.avgColor || DEFAULT_COLOR[p.category],
         stretch: p.stretch,
         body: bodyForRender(),
@@ -221,7 +307,9 @@ async function runOutfit() {
       if (scene) scene = markDrawn(scene, before, c, W, H);
     }
     $('#outfit-view').replaceChildren(c);
+    if (tuckIn && top && bottom && !tuck) notes.push('상의가 짧아서 바지 허리까지 오지 않아요(넣어 입을 필요가 없는 기장이에요).');
     $('#outfit-notes').innerHTML = notes.map((n) => `<li>${esc(n)}</li>`).join('');
+    renderOutfitColor(top && cuts.top?.avgColor, bottom && cuts.bottom?.avgColor);
     const advice = model.poseCheck.ok ? '' : `${model.poseCheck.issues.map((i) => i.text).join(', ')}. 정면으로 서서 팔을 내린 사진이 가장 정확해요.`;
     outfitStatus(advice || (model === tryon.refPhoto ? '저장해 둔 기준 사진에 입혀 봤어요.' : ''), advice ? 'warn' : '');
     if (holes.length && aiEnabled()) fillOutfitHoles(holes);

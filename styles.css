@@ -219,6 +219,7 @@ button.block { width: 100%; }
 .list li .grow { flex: 1; min-width: 0; }
 .item-photo { margin: 8px 0; }
 .outfit-save { align-items: end; margin-top: 10px; }
+.color-dot { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 4px; border: 1px solid var(--line); }
 .size-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
 .size-compare figure { margin: 0; min-width: 0; }
 .size-compare canvas { width: 100%; height: auto; border-radius: 10px; display: block; }

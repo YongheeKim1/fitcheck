@@ -110,6 +110,7 @@
   //   3) 옷 아래 부드러운 그림자로 몸 위에 얹힌 느낌
   let photo = null; // draw()가 옷을 그리기 전에 찍어 둔 화면(사진 또는 카메라 프레임)
   let shadeK = 1; // 내 사진 그림자 세기(직사광일수록 크게, tryon.js의 shadowStrength)
+  let drawCategory = 'top'; // 지금 그리는 옷 종류
   let noMarks = false; // 옷 사진 입히기 모드에서는 끼는 곳 표시선을 생략
   const canMakeCanvas = typeof document !== 'undefined';
   const bufs = {};
@@ -176,14 +177,16 @@
       }
     }
     const r = Math.max(3, Math.round(sw / 40));
+    const r1 = Math.max(1, Math.round(sw / 160)); // 작은 흐림: 원래 옷의 잔무늬(청바지 워싱·니트 결)는 지운다
+    const boxAt = (x, y, rr) => {
+      const ya = Math.max(0, y - rr), yb = Math.min(sh, y + rr + 1), xa = Math.max(0, x - rr), xb = Math.min(sw, x + rr + 1);
+      return (S[yb * (sw + 1) + xb] - S[ya * (sw + 1) + xb] - S[yb * (sw + 1) + xa] + S[ya * (sw + 1) + xa]) / ((yb - ya) * (xb - xa));
+    };
     for (let y = 0; y < sh; y++) {
-      const ya = Math.max(0, y - r), yb = Math.min(sh, y + r + 1);
       for (let x = 0; x < sw; x++) {
-        const xa = Math.max(0, x - r), xb = Math.min(sw, x + r + 1);
-        const area = (yb - ya) * (xb - xa);
-        const blur = (S[yb * (sw + 1) + xb] - S[ya * (sw + 1) + xb] - S[yb * (sw + 1) + xa] + S[ya * (sw + 1) + xa]) / area;
-        // 주름(주변보다 어두움)은 살리고, 밝은 쪽과 큰 경계는 약하게
-        const v = 128 + Math.max(-45, Math.min(18, lum[y * sw + x] - blur)) * 1.4;
+        // 띠 통과(작게 흐린 밝기 - 크게 흐린 밝기): 주름·그림자 크기의 명암만 남기고, 잔무늬와 큰 색 경계는 뺀다.
+        // 주름(주변보다 어두움)은 살리고 밝은 쪽은 약하게
+        const v = 128 + Math.max(-40, Math.min(15, boxAt(x, y, r1) - boxAt(x, y, r))) * 1.4;
         const i = (y * sw + x) * 4;
         d[i] = d[i + 1] = d[i + 2] = v;
         d[i + 3] = 255;
@@ -527,6 +530,12 @@
       mg.fill();
       mg.stroke();
     }
+    for (const poly of pairs.caps || []) { // 어깨 덮개: 둥근 어깨 꼭대기를 덮는 띠
+      mg.beginPath();
+      poly.forEach((q, i) => (i ? mg.lineTo(q.x, q.y) : mg.moveTo(q.x, q.y)));
+      mg.closePath();
+      mg.fill();
+    }
     cg.clearRect(0, 0, W, H);
     cg.drawImage(out, 0, 0);
     cg.globalCompositeOperation = 'destination-in';
@@ -610,6 +619,12 @@
         fmg.fill();
         if (tpsDone) fmg.stroke();
       }
+      for (const poly of pairs.caps || []) {
+        fmg.beginPath();
+        poly.forEach((q, i2) => (i2 ? fmg.lineTo(q.x, q.y) : fmg.moveTo(q.x, q.y)));
+        fmg.closePath();
+        fmg.fill();
+      }
       gg.globalCompositeOperation = 'destination-in';
       gg.drawImage(fm, 0, 0);
       gg.globalCompositeOperation = 'source-over';
@@ -657,7 +672,9 @@
     S.globalCompositeOperation = 'source-over';
     L.save();
     L.globalCompositeOperation = 'overlay';
-    L.globalAlpha = Math.min(0.32, 0.18 * shadeK); // 옷 사진에 이미 주름이 있으니 내 사진 명암은 약하게(그림자가 진한 사진이면 조금 더)
+    // 옷 사진에 이미 주름이 있으니 내 사진 명암은 약하게(그림자가 진한 사진이면 조금 더). 바지는 원래 바지의 워싱 무늬가
+    // 얼룩처럼 옮겨지기 쉬워 더 약하게
+    L.globalAlpha = Math.min(0.32, (drawCategory === 'bottom' ? 0.1 : 0.18) * shadeK);
     L.drawImage(sh, 0, 0);
     L.restore();
     ctx.save();
@@ -874,7 +891,8 @@
       }
       if (v.length < 200) return null;
       v.sort((a, b) => a - b);
-      return (v[Math.floor(v.length / 2)] * 1.4826) / 1.118;
+      // med: 노이즈 세기(표준편차로 환산), p90: 선명도(밝기가 크게 바뀌는 곳의 세기)
+      return { med: (v[Math.floor(v.length / 2)] * 1.4826) / 1.118, p90: v[Math.floor(v.length * 0.9)] };
     };
     const opaque = (i) => d[i + 3] === 255 && d[i - 4 + 3] === 255 && d[i + 4 + 3] === 255 && d[i - W * 4 + 3] === 255 && d[i + W * 4 + 3] === 255;
     const sg2 = sigma(d, opaque);
@@ -883,8 +901,22 @@
       const pd = photo.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
       sp = sigma(pd, opaque); // 옷이 놓일 자리(원래 사진)의 입자감
     }
+    // 선명도: 늘려 입힌 상품 사진이 내 사진보다 흐리면(가장자리 세기가 약하면) 그만큼 선명하게(라플라시안 샤프닝)
+    if (sg2 != null && sp != null && sp.p90 > sg2.p90 * 1.15) {
+      const amt = Math.min(1.2, sp.p90 / Math.max(1, sg2.p90) - 1);
+      const src = new Uint8ClampedArray(d);
+      for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+        const i = (y * W + x) * 4;
+        if (!src[i + 3]) continue;
+        for (let k = 0; k < 3; k++) {
+          const n4 = (src[i - 4 + k] + src[i + 4 + k] + src[i - W * 4 + k] + src[i + W * 4 + k]) / 4;
+          d[i + k] = src[i + k] + amt * (src[i + k] - n4);
+        }
+      }
+      g.putImageData(img, 0, 0);
+    }
     if (sg2 != null && sp != null) {
-      const add = Math.min(8, Math.sqrt(Math.max(0, sp * sp - sg2 * sg2)));
+      const add = Math.min(8, Math.sqrt(Math.max(0, sp.med * sp.med - sg2.med * sg2.med)));
       if (add > 0.4) {
         let seed = 12345;
         const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
@@ -1375,6 +1407,7 @@
       sub(Hl, mul(n, hW / 2)), sub(T, mul(n, wW / 2)),
     ];
     const tex = o.texture && o.texture.category === 'bottom' ? o.texture : null;
+    let D0 = 0; // 바지를 실제로 그리기 시작하는 깊이(허리 위 T에서). 상품 사진에서 허리가 가려졌으면 0보다 크다
     if (tex) {
       // 허리 띠: 허리 밴드 위(T) → 엉덩이(Hl) → 가랑이(C) 7칸 + 다리 두 개(garmentsource.js의 원본 띠와 같은 구성)
       // 원본 허리 띠가 가랑이 아래 두 칸(9줄)까지 있으면 목표도 같이 늘리고, 다리 위에 겹친 부분은 서서히 투명하게 섞는다
@@ -1386,7 +1419,7 @@
       // 실제 크기(다리 길이로 잰 상품 사진 배율)대로 가랑이 쪽에만 붙인다. 덮인 위쪽은 내 사진의 상의가 그대로 보인다
       const w0 = tex.ribbons.waist[0], w6 = tex.ribbons.waist[6];
       const srcLegs = (tex.ribbons.legs || []).filter(Boolean).map((l) => l.lengthPx).filter((v) => v > 0);
-      let D0 = 0;
+      D0 = 0;
       if (w0 && w6 && srcLegs.length && g.length > g.rise) {
         const srcPerCm = Math.max(...srcLegs) / (g.length - g.rise);
         const visCm = (w6[0].y - w0[0].y) / srcPerCm;
@@ -1490,7 +1523,7 @@
     // 밑단 아래 원래 바지를 지울 수 있는 가장 낮은 줄: 발목과 발꿈치 사이(그 아래는 신발)
     const ankY = Math.max(P(27).y, P(28).y);
     const ankleMax = ankY + 0.85 * Math.max(0, Math.max(P(29).y, P(30).y, P(31).y, P(32).y) - ankY);
-    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax, legs: [[P(25), P(29)], [P(26), P(30)]], r: 3.6 * s }, bandTop: T.y } };
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax, legs: [[P(25), P(29)], [P(26), P(30)]], r: 3.6 * s }, bandTop: T.y }, waistTop: add(T, mul(u, D0)) };
   }
 
   // ---------------- 상의 ----------------
@@ -1513,6 +1546,29 @@
     return { g, guessed };
   }
 
+  // 실제 어깨 윤곽선: 열(x)마다 위에서 내려가며 처음 만나는 몸(피부 2·옷 4) 픽셀의 y. 머리카락·얼굴(1·3)·소품(5)·배경(0)은 건너뛴다.
+  // seg: { cat, w, h, mirror }(mirror면 분할은 좌우 반전 전 영상 기준). 찾지 못하면 null
+  function shoulderContour(seg, W, H, yFrom, yTo) {
+    const { cat, w, h } = seg;
+    const cache = new Map();
+    return (x) => {
+      const cx = Math.round(x);
+      if (cache.has(cx)) return cache.get(cx);
+      let col = Math.floor(((seg.mirror ? W - 1 - cx : cx) * w) / W);
+      let y = null;
+      if (col >= 0 && col < w) {
+        const r0 = Math.max(0, Math.floor((yFrom * h) / H)), r1 = Math.min(h - 1, Math.ceil((yTo * h) / H));
+        for (let r = r0; r <= r1; r++) {
+          const c = cat[r * w + col];
+          // 피부·옷만(소품 5는 빼야 마스크 끈·가방끈을 어깨로 착각하지 않는다). 7: 코디에서 먼저 입힌 옷
+          if (c === 2 || c === 4 || c === 7) { y = ((r + 0.5) * H) / h; break; }
+        }
+      }
+      cache.set(cx, y);
+      return y;
+    };
+  }
+
   function drawTop(ctx, o) {
     const { pxPerCm: s, color } = o;
     const { g, guessed } = fillTop(o.g);
@@ -1531,9 +1587,39 @@
     const give = 1 + STRETCH[o.stretch || 'none'];
     const notes = [];
 
-    const HPS = sub(M, mul(u, 4 * s));                         // 옷깃 옆 어깨 가장 높은 곳
+    // 옷은 어깨에 걸린다: 사진 속 실제 어깨 윤곽선을 먼저 찾아 옷깃 옆 꼭대기(HPS)와 어깨 봉제선을 그 위에 올린다.
+    // 총장은 HPS부터, 소매는 봉제선부터 재므로, 작은 옷은 자리가 바뀌지 않고 밑단·소매 끝이 짧아진다.
+    // 분할 결과가 없으면(라이브 초기 등) 관절 기준 어림값
+    const contour = o.seg ? shoulderContour(o.seg, o.W, o.H, M.y - torso * 0.7, M.y + torso * 0.35) : null;
+    let HPS = sub(M, mul(u, 4 * s));                           // 옷깃 옆 어깨 가장 높은 곳
+    if (contour) {
+      // 관절 기준 어림값에서 너무 멀리 떨어진 값(머리카락·잡힌 물건)은 버리고, 양쪽 차이가 크면 낮은 쪽(어깨에 가까운 쪽)을 믿는다
+      const guessY = M.y - 4 * s;
+      const ys = [-1, 1].map((sd) => contour(add(M, mul(n, sd * 7.5 * s)).x))
+        .filter((v) => v != null && v > guessY - 7 * s && v < guessY + 6 * s);
+      if (ys.length) {
+        const pick = ys.length === 2 && Math.abs(ys[0] - ys[1]) > 3 * s ? [Math.max(...ys)] : ys;
+        const yN = pick.reduce((a, b) => a + b, 0) / pick.length - 0.4 * s; // 천 두께만큼 살짝 위
+        const t = Math.max(-11 * s, Math.min(-1 * s, (yN - M.y) / (u.y || 1)));
+        HPS = add(M, mul(u, t));
+      }
+    }
     const drop = Math.max(0, (g.shoulder - body.shoulder) / 2); // 몸 어깨보다 넓으면 어깨선이 팔로 내려온다
-    const seam = (side) => add(add(M, mul(n, (side * g.shoulder * s) / 2)), mul(u, (drop * 0.8 - 1) * s));
+    const seamGuess = (side) => add(add(M, mul(n, (side * g.shoulder * s) / 2)), mul(u, (drop * 0.8 - 1) * s));
+    // 봉제선: 어깨 너비 위치의 실제 어깨 윤곽 위. 옷 어깨가 몸보다 넓으면 윤곽이 팔로 내려가므로 저절로 드롭숄더가 된다
+    const seam = (side) => {
+      const b = seamGuess(side);
+      if (!contour) return b;
+      const halfG = (g.shoulder * s) / 2, halfB = (body.shoulder * s) / 2;
+      // 옷 어깨가 몸보다 넓으면: 내 어깨 끝(윤곽선) 높이에서 넓은 만큼 팔 쪽으로 흘러내린다(드롭숄더).
+      // 봉제선 자리를 그대로 재면 몸 밖이라 한쪽은 팔이, 한쪽은 빈 곳이 잡혀 좌우가 달라진다
+      const atX = halfG > halfB ? add(M, mul(n, side * halfB * 0.92)).x : b.x;
+      const y = contour(atX);
+      // 봉제선은 목 옆 꼭대기보다 높을 수 없고, 겨드랑이보다 낮을 수 없다(엉뚱한 윤곽은 어림값으로)
+      if (y == null || y < HPS.y - 1 * s || y > M.y + torso * 0.25) return b;
+      const dropPx = halfG > halfB ? Math.max(0, drop) * 0.8 * s : 0;
+      return V(b.x, y - 0.3 * s + dropPx);
+    };
     const cw = Math.max(visW(2 * g.chest, 'chest'), visW(body.chest, 'chest')) * s;
     const loose = Math.max(0, 2 * g.chest - body.chest);
     const armpitAt = add(M, mul(u, torso * 0.28 + (loose / 8) * s));
@@ -1663,7 +1749,9 @@
         const yoke = [];
         for (const sd of [-1, 1]) {
           const dSeam = dot(sub(seam(sd), HPS), u);
-          const dTop = Math.max(0, (dSeam - f * dArm) / (1 - f));
+          // 몸판 윗모서리: 상품 사진의 어깨 관절이 봉제선에 오도록 정하되, 봉제선보다 2.5cm 넘게 위에 있지는 않게
+          // (어깨가 넓은 옷에서 모서리가 목 높이에 남으면 어깨 끝이 수평 선반처럼 튀어나온다)
+          const dTop = Math.max(0, (dSeam - f * dArm) / (1 - f), dSeam - 2.5 * s);
           const edgeTop = add(top(sd), mul(u, dTop));
           const src = [], dd = [];
           for (let k = 0; k <= 4; k++) {
@@ -1678,6 +1766,23 @@
           yoke.push({ src, dst: dd });
         }
         pairs.push(...yoke, { src: srcT.slice(4), dst: dst.slice(4), fill: true });
+        // 어깨 덮개: 옷은 둥근 어깨 면을 덮고 내려간다. 몸판 윗선(목 옆 → 봉제선 직선)이 어깨 꼭대기를 가로지르면
+        // 그 사이로 원래 옷이 보이므로, 실제 윤곽을 따라 3cm 깊이 띠를 옷 모양에 더한다(천은 빈틈 메우기로 채워진다)
+        if (contour) {
+          pairs.caps = [-1, 1].map((sd) => {
+            const neckPt = add(HPS, mul(n, sd * 7.5 * s));
+            const sp = seam(sd);
+            const pts = [];
+            for (let k = 0; k <= 8; k++) {
+              const x = neckPt.x + ((sp.x - neckPt.x) * k) / 8;
+              const y = contour(x);
+              const yLine = neckPt.y + ((sp.y - neckPt.y) * k) / 8;
+              // 윤곽이 없거나 직선보다 아래면(덮을 필요 없음) 직선 위
+              pts.push(V(x, y != null && y < yLine ? y - 0.6 * s : yLine));
+            }
+            return [...pts, add(sp, mul(u, 3 * s)), add(neckPt, mul(u, 3 * s))];
+          });
+        }
       } else {
         pairs.push({ src: srcT, dst, fill: 4 }); // 목둘레(위 4줄)는 비워 둔다
       }
@@ -1731,7 +1836,13 @@
           }
         }
       }
-      if (hemDepth > 1.02) {
+      if (o.tucked) {
+        // 넣어 입기: 바지 허리 바로 위에서 천이 모이며 살짝 부푼다(블라우징) → 허리선 위에 처진 가로 주름 몇 줄
+        for (const [k, a] of [[1.2, 0.22], [2.6, 0.18], [4.2, 0.12]]) {
+          const c = sub(hemC, mul(u, (k + 4) * s)); // 숨은 4cm 위부터
+          folds.push({ pts: across(c, n, hw * 1.15, -0.42, 0.42, 0.03), ...soft, a, hl: mul(u, s * 0.9) });
+        }
+      } else if (hemDepth > 1.02) {
         for (const k of [1, 2]) {
           const c = sub(hemC, mul(u, k * 2.6 * s));
           folds.push({ pts: across(c, n, hw, -0.4, 0.4, 0.02), ...soft, a: 0.1 + Math.min(0.12, (hemDepth - 1) * 0.5), hl: mul(u, s * 0.8) });
@@ -1768,7 +1879,8 @@
     else if (g.shoulder < body.shoulder - 2 && !unsure('shoulder')) notes.push(`어깨가 내 어깨보다 ${cmText(body.shoulder - g.shoulder)} 좁아요. 어깨가 낄 수 있어요.`);
 
     const hemVsHip = dot(sub(hemC, hipMid), u) / s;
-    notes.push(hemVsHip >= 0 ? `밑단이 골반선보다 약 ${cmText(hemVsHip)} 아래로 내려와요.` : `밑단이 골반선보다 약 ${cmText(hemVsHip)} 위에 와요(짧은 기장).`);
+    if (o.tucked) notes.push('밑단을 바지 허리 안에 넣어 입었어요.');
+    else notes.push(hemVsHip >= 0 ? `밑단이 골반선보다 약 ${cmText(hemVsHip)} 아래로 내려와요.` : `밑단이 골반선보다 약 ${cmText(hemVsHip)} 위에 와요(짧은 기장).`);
     if (body.estimated.length) {
       notes.push((o.poseIssues || []).length
         ? '이 사진 자세로는 몸 치수를 추정하기 어려워서 몸과의 비교(끼는 곳)는 뺐어요. 내 체형 탭에 줄자로 잰 치수를 넣으면 비교해 드려요.'
@@ -1794,6 +1906,8 @@
       pg.drawImage(ctx.canvas, 0, 0);
     }
     shadeK = opts.scene?.shadeK ?? 1;
+    drawCategory = opts.category;
+    if (!opts.seg && opts.scene?.cat) opts = { ...opts, seg: opts.scene }; // 어깨 윤곽선용 분할
     liveMode = !!opts.live;
     // 팔을 들었거나 몸 앞을 가리면 옷 사진(팔 내린 모델)과 자세 차이가 커서, 하나로 휘면 몸판이 끌려간다 → 띠 방식
     armsFront = (opts.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross' || k === 'face');

@@ -729,7 +729,8 @@ function liveLoop() {
         const scale = sw / shoulderJointCm();
         l.scale = l.scale ? l.scale + (scale - l.scale) * 0.2 : scale;
         const check = BodyAnalysis.checkPose(l.smooth, W, H);
-        const base = { lm: l.smooth, W, H, mirror, pxPerCm: l.scale, live: true, tps: false, poseIssues: check.issues.map((i) => i.key) };
+        const base = { lm: l.smooth, W, H, mirror, pxPerCm: l.scale, live: true, tps: false, poseIssues: check.issues.map((i) => i.key),
+          seg: l.cat ? { ...l.cat, mirror } : null }; // 어깨 윤곽선(옷을 실제 어깨에 건다)
         // 옷장 코디면 여러 벌을 정한 순서대로(꺼내 입기: 바지 → 상의), 아니면 사이즈표 한 벌
         const specs = l.outfit ? l.outfit.map((o) => ({ ...o.opts, body: bodyForRender(), ...base })) : [garmentOpts(base)];
         let r = null, front = null;
