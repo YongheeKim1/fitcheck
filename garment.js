@@ -345,6 +345,188 @@
     return [p(a), add(p((a + b) / 2), mul(down, w * sag)), p(b)];
   }
 
+  // ---------- 옷 전체를 하나로 휘기(TPS: thin-plate spline) ----------
+  // 띠(단면)마다 따로 휘면 몸판·소매·다리 사이에 이음매와 틈이 생긴다. 띠의 대응점(실측 cm로 정한 자리)을 모두 지나는
+  // 하나의 매끄러운 휘기를 구해 옷 사진 전체를 한 번에 휜다. 계산: 목표 좌표 → 원본 좌표(역방향)
+  function tpsFit(dst, src, lambda) {
+    const n = dst.length, N = n + 3;
+    const U = (r2) => (r2 > 1e-12 ? r2 * Math.log(r2) : 0);
+    const A = Array.from({ length: N }, () => new Float64Array(N + 2));
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const dx = dst[i].x - dst[j].x, dy = dst[i].y - dst[j].y;
+        A[i][j] = U(dx * dx + dy * dy) + (i === j ? lambda : 0);
+      }
+      A[i][n] = 1; A[i][n + 1] = dst[i].x; A[i][n + 2] = dst[i].y;
+      A[n][i] = 1; A[n + 1][i] = dst[i].x; A[n + 2][i] = dst[i].y;
+      A[i][N] = src[i].x; A[i][N + 1] = src[i].y;
+    }
+    // 가우스 소거(부분 피벗)
+    for (let c = 0; c < N; c++) {
+      let piv = c;
+      for (let r = c + 1; r < N; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+      if (Math.abs(A[piv][c]) < 1e-12) return null;
+      [A[c], A[piv]] = [A[piv], A[c]];
+      for (let r = 0; r < N; r++) {
+        if (r === c) continue;
+        const f = A[r][c] / A[c][c];
+        if (!f) continue;
+        for (let k = c; k < N + 2; k++) A[r][k] -= f * A[c][k];
+      }
+    }
+    const wx = new Float64Array(N), wy = new Float64Array(N);
+    for (let r = 0; r < N; r++) { wx[r] = A[r][N] / A[r][r]; wy[r] = A[r][N + 1] / A[r][r]; }
+    return { dst, wx, wy, n, U };
+  }
+  function tpsEval(t, x, y) {
+    const { dst, wx, wy, n, U } = t;
+    let sx = wx[n] + wx[n + 1] * x + wx[n + 2] * y;
+    let sy = wy[n] + wy[n + 1] * x + wy[n + 2] * y;
+    for (let i = 0; i < n; i++) {
+      const dx = x - dst[i].x, dy = y - dst[i].y;
+      const u = U(dx * dx + dy * dy);
+      sx += wx[i] * u; sy += wy[i] * u;
+    }
+    return [sx, sy];
+  }
+
+  // WebGL로 격자 메시 하나를 텍스처와 함께 그린다(삼각형 수천 개를 한 번에, 조각 사이 틈 없음)
+  let glState = null;
+  function glWarp(img, W, H, verts, uvs, idx) {
+    if (!canMakeCanvas) return null;
+    if (!glState) {
+      const c = document.createElement('canvas');
+      const gl = c.getContext('webgl', { premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: true });
+      if (!gl) { glState = { failed: true }; return null; }
+      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
+      const prog = gl.createProgram();
+      gl.attachShader(prog, sh(gl.VERTEX_SHADER, 'attribute vec2 p;attribute vec2 t;uniform vec2 sz;varying vec2 v;void main(){v=t;gl_Position=vec4(p.x/sz.x*2.0-1.0,1.0-p.y/sz.y*2.0,0.0,1.0);}'));
+      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, 'precision mediump float;varying vec2 v;uniform sampler2D s;void main(){if(v.x<0.0||v.y<0.0||v.x>1.0||v.y>1.0)discard;gl_FragColor=texture2D(s,v);}'));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { glState = { failed: true }; return null; }
+      glState = { c, gl, prog, tex: gl.createTexture(), vb: gl.createBuffer(), tb: gl.createBuffer(), ib: gl.createBuffer(), lastImg: null,
+        u32: !!gl.getExtension('OES_element_index_uint') };
+    }
+    if (glState.failed) return null;
+    const { c, gl, prog, tex, vb, tb, ib } = glState;
+    if (gl.isContextLost()) { glState = null; return null; }
+    if (idx.length > 65535 * 3 && !glState.u32) return null;
+    c.width = W; c.height = H;
+    gl.viewport(0, 0, W, H);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(prog);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (glState.lastImg !== img) {
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      glState.lastImg = img;
+    }
+    const bind = (buf2, data, name) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf2);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+      const loc = gl.getAttribLocation(prog, name);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    };
+    bind(vb, verts, 'p');
+    bind(tb, uvs, 't');
+    gl.uniform2f(gl.getUniformLocation(prog, 'sz'), W, H);
+    gl.uniform1i(gl.getUniformLocation(prog, 's'), 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    const big = verts.length / 2 > 65535;
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, big ? new Uint32Array(idx) : new Uint16Array(idx), gl.DYNAMIC_DRAW);
+    gl.drawElements(gl.TRIANGLES, idx.length, big ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
+    return c;
+  }
+
+  // 띠 짝들로 TPS를 맞추고, 목표 쪽 격자를 원본 좌표로 보내 WebGL로 그린다. 실패하면 null(띠 방식으로 그린다)
+  function warpTPS(L, img, pairs, W, H) {
+    const D = [], S = [];
+    for (const pr of pairs) {
+      // 허리 조각의 "다리와 겹치게 늘린 줄"(fade)은 대응점에서 뺀다(다리 대응점과 부딪힌다)
+      const src = pr.fade ? pr.src.slice(0, 7) : pr.src, dst = pr.fade ? pr.dst.slice(0, 7) : pr.dst;
+      const n = Math.min(9, Math.max(src.length, dst.length));
+      const a = resample(src, n), b = resample(dst.map(byX), n);
+      for (let i = 0; i < n; i++) {
+        const ra = a[i][0].x <= a[i][1].x ? a[i] : [a[i][1], a[i][0]];
+        for (const t of [0, 0.5, 1]) {
+          D.push(lerpV(b[i][0], b[i][1], t));
+          S.push(lerpV(ra[0], ra[1], t));
+        }
+      }
+    }
+    if (D.length < 6) return false;
+    // 목표 쪽에서 너무 가까운 점은 합친다(서로 다른 원본을 가리키면 휘기가 접힌다)
+    const minD = W / 120;
+    const dd = [], ss = [];
+    D.forEach((p, i) => {
+      const k = dd.findIndex((q) => Math.hypot(q.x - p.x, q.y - p.y) < minD);
+      if (k < 0) { dd.push(p); ss.push(S[i]); }
+    });
+    const sc = 1 / W; // 좌표를 0~1로 줄여 계산(수치 안정)
+    const t = tpsFit(dd.map((p) => V(p.x * sc, p.y * sc)), ss.map((p) => V(p.x * sc, p.y * sc)), 1e-3);
+    if (!t) return false;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of dd) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+    const m = W * 0.04;
+    x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(W, x1 + m); y1 = Math.min(H, y1 + m);
+    const step = Math.max(4, Math.round(Math.min(W, H) / 90));
+    const nx = Math.max(2, Math.ceil((x1 - x0) / step) + 1), ny = Math.max(2, Math.ceil((y1 - y0) / step) + 1);
+    const verts = new Float32Array(nx * ny * 2), uvs = new Float32Array(nx * ny * 2);
+    const iw = img.width, ih = img.height;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const x = Math.min(x1, x0 + i * step), y = Math.min(y1, y0 + j * step);
+      const [sx, sy] = tpsEval(t, x * sc, y * sc);
+      const k = (j * nx + i) * 2;
+      verts[k] = x; verts[k + 1] = y;
+      uvs[k] = (sx / sc) / iw; uvs[k + 1] = (sy / sc) / ih;
+    }
+    const idx = [];
+    for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+      const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1;
+      idx.push(a, b, d, a, d, c);
+    }
+    const out = glWarp(img, W, H, verts, uvs, idx);
+    if (!out) return false;
+    // 실측으로 정한 옷 모양(띠들의 합집합, 살짝 넓혀서) 안만 남긴다: 대응점 밖의 내용(벨트·긴소매 나머지·모델 손)은 버린다
+    const clip = buf('tpsClip', W, H);
+    const cg = clip.getContext('2d');
+    cg.setTransform(1, 0, 0, 1, 0, 0);
+    cg.globalCompositeOperation = 'source-over';
+    // 합집합 마스크: 띠마다 채우고 테두리를 넓힌 뒤 destination-in을 한 번만 적용한다
+    const mask = buf('tpsMask', W, H);
+    const mg = mask.getContext('2d');
+    mg.setTransform(1, 0, 0, 1, 0, 0);
+    mg.clearRect(0, 0, W, H);
+    mg.fillStyle = '#fff';
+    mg.strokeStyle = '#fff';
+    mg.lineJoin = 'round';
+    mg.lineWidth = Math.max(2, W / 70);
+    for (const pr of pairs) {
+      const rows = pr.dst.map(byX);
+      mg.beginPath();
+      rows.forEach((r, i) => (i ? mg.lineTo(r[0].x, r[0].y) : mg.moveTo(r[0].x, r[0].y)));
+      for (let i = rows.length - 1; i >= 0; i--) mg.lineTo(rows[i][1].x, rows[i][1].y);
+      mg.closePath();
+      mg.fill();
+      mg.stroke();
+    }
+    cg.clearRect(0, 0, W, H);
+    cg.drawImage(out, 0, 0);
+    cg.globalCompositeOperation = 'destination-in';
+    cg.drawImage(mask, 0, 0);
+    cg.globalCompositeOperation = 'source-over';
+    L.drawImage(clip, 0, 0);
+    return true;
+  }
+  let useTPS = true; // draw()에서 자세에 따라 정한다(팔을 크게 들면 띠 방식이 낫다)
+  let armsFront = false; // 팔이 몸 앞에 오는 자세(팔 듦·팔이 몸을 가림)
+
   // pairs: [{ src: 원본 띠, dst: 목표 띠 }]. 실측 크기로 휜 옷 사진에 내 사진 명암을 살짝 입히고 그림자와 함께 얹는다
   function paintTexture(ctx, img, pairs, folds) {
     if (!(canMakeCanvas && ctx.canvas && photo)) return false;
@@ -355,7 +537,8 @@
     L.clearRect(0, 0, W, H);
     L.imageSmoothingEnabled = true;
     L.imageSmoothingQuality = 'high';
-    for (const { src, dst, fade } of pairs) {
+    const tpsDone = useTPS && warpTPS(L, img, pairs, W, H);
+    for (const { src, dst, fade } of tpsDone ? [] : pairs) {
       if (!fade) { drawRibbon(L, img, src, dst); continue; }
       // 이어 붙이는 조각: 따로 그린 뒤 from(불투명) → to(투명)로 서서히 사라지게 해서 얹는다
       const pc = buf('piece', W, H);
@@ -392,20 +575,32 @@
       gg.setTransform(1, 0, 0, 1, 0, 0);
       gg.globalCompositeOperation = 'source-over';
       gg.clearRect(0, 0, W, H);
-      gg.save();
-      gg.beginPath();
+      gg.imageSmoothingEnabled = true;
+      gg.imageSmoothingQuality = 'high';
+      // 거친 단계부터: 큰 구멍(사진 속 팔과 몸통 사이 배경 틈 등)은 넓게 흐린 천 색, 작은 틈은 가까운 천 색
+      for (const k of [72, 32, 12]) { const b = blurred(k); for (let r = 0; r < 3; r++) gg.drawImage(b, 0, 0, W, H); }
+      // 메울 범위: 목표 띠 모양 안(하나로 휜 경우엔 잘라 낸 옷 모양과 같게 테두리를 조금 넓힌다)
+      const fm = buf('gapMask', W, H);
+      const fmg = fm.getContext('2d');
+      fmg.setTransform(1, 0, 0, 1, 0, 0);
+      fmg.clearRect(0, 0, W, H);
+      fmg.fillStyle = '#fff';
+      fmg.strokeStyle = '#fff';
+      fmg.lineJoin = 'round';
+      fmg.lineWidth = Math.max(2, W / 70);
       for (const { dst, fill } of pairs) {
         if (!fill) continue;
         const rows = dst.slice(typeof fill === 'number' ? fill : 0).map(byX);
-        rows.forEach((r, i) => (i ? gg.lineTo(r[0].x, r[0].y) : gg.moveTo(r[0].x, r[0].y)));
-        for (let i = rows.length - 1; i >= 0; i--) gg.lineTo(rows[i][1].x, rows[i][1].y);
-        gg.closePath();
+        fmg.beginPath();
+        rows.forEach((r, i2) => (i2 ? fmg.lineTo(r[0].x, r[0].y) : fmg.moveTo(r[0].x, r[0].y)));
+        for (let i2 = rows.length - 1; i2 >= 0; i2--) fmg.lineTo(rows[i2][1].x, rows[i2][1].y);
+        fmg.closePath();
+        fmg.fill();
+        if (tpsDone) fmg.stroke();
       }
-      gg.clip('nonzero');
-      gg.imageSmoothingEnabled = true;
-      gg.imageSmoothingQuality = 'high';
-      for (const k of [32, 12]) { const b = blurred(k); for (let r = 0; r < 3; r++) gg.drawImage(b, 0, 0, W, H); }
-      gg.restore();
+      gg.globalCompositeOperation = 'destination-in';
+      gg.drawImage(fm, 0, 0);
+      gg.globalCompositeOperation = 'source-over';
       L.save();
       L.globalCompositeOperation = 'destination-over';
       L.drawImage(gf, 0, 0);
@@ -507,7 +702,9 @@
       // 피부로 덮어도 되는 곳: 위팔의 아래쪽(어깨에서 45% 아래부터 팔꿈치까지) — 소매 끝이 오는 자리
       arms.push({ a: lerpV(P(sh), P(el), 0.45), b: P(el), r: 5 * s });
       // 팔 전체(어깨~손끝)는 몸통 앞에 있다: 사진 속 피부가 보이는 곳은 옷 위로 올린다(새 소매 안쪽은 composeScene에서 뺀다)
-      hands.push({ a: lerpV(P(sh), P(el), 0.15), b: P(el), r: 5 * s }, { a: P(el), b: P(wr), r: 4.8 * s }, { a: P(wr), b: P(fi), r: 5.5 * s });
+      // 팔꿈치~손끝은 늘 옷 위로. 위팔은 팔을 들었거나 몸 앞을 가리는 자세일 때만(평소엔 새 소매 안쪽 피부가 비쳐 보인다)
+      if (armsFront) hands.push({ a: lerpV(P(sh), P(el), 0.15), b: P(el), r: 5 * s });
+      hands.push({ a: P(el), b: P(wr), r: 4.8 * s }, { a: P(wr), b: P(fi), r: 5.5 * s });
       props.push({ a: P(wr), b: P(fi), r: 10 * s }); // 손에 든 물건(휴대폰 등)
     }
     segs.push({ a: M, b: sub(M, mul(u, 12 * s)), r: 6 * s }); // 목
@@ -595,6 +792,100 @@
   // 1) 새 옷 밖으로 삐져나온 원래 옷(몸이 없는 자리)을 배경으로 메운다
   // 2) 옷을 얹는다
   // 3) 손·팔뚝(소매 안 제외)과 얼굴·머리를 옷 위로 다시 올린다
+  // 사진에 얹기 전 마무리: 옷이 "오려 붙인" 티가 나지 않게
+  //   1) 외곽을 1~2px 부드럽게(사진 속 물체 경계는 칼로 자른 듯 날카롭지 않다)
+  //   2) 내 사진의 입자감(노이즈)만큼 옷에도 입자를 넣는다(상품 사진은 보통 더 매끈하다)
+  //   3) 배경 빛이 옷 가장자리에 살짝 번지게(light wrap)
+  function finishGarment(G, W, H) {
+    const g = G.getContext('2d', { willReadFrequently: true });
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    // 1) 부드러운 외곽: 줄였다 키운 알파를 곱한다
+    const f = Math.max(2, Math.round(W / 450));
+    const sw = Math.max(1, Math.round(W / f)), sh = Math.max(1, Math.round(H / f));
+    const small = buf('featherSmall', sw, sh);
+    const sg = small.getContext('2d');
+    sg.clearRect(0, 0, sw, sh);
+    sg.imageSmoothingEnabled = true;
+    sg.drawImage(G, 0, 0, sw, sh);
+    g.save();
+    g.globalCompositeOperation = 'destination-in';
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(small, 0, 0, W, H);
+    g.restore();
+
+    // 3) 빛 번짐: 크게 흐린 배경을 옷 가장자리 띠에만 약하게
+    if (photo) {
+      const k = 20;
+      const bw = Math.max(1, Math.round(W / k)), bh = Math.max(1, Math.round(H / k));
+      const bp = buf('wrapPhoto', bw, bh);
+      const bpg = bp.getContext('2d');
+      bpg.imageSmoothingEnabled = true;
+      bpg.drawImage(photo, 0, 0, bw, bh);
+      const ba = buf('wrapAlpha', bw, bh);
+      const bag = ba.getContext('2d');
+      bag.clearRect(0, 0, bw, bh);
+      bag.imageSmoothingEnabled = true;
+      bag.drawImage(G, 0, 0, bw, bh);
+      const wrap = buf('wrap', W, H);
+      const wg = wrap.getContext('2d');
+      wg.globalCompositeOperation = 'source-over';
+      wg.clearRect(0, 0, W, H);
+      wg.imageSmoothingEnabled = true;
+      wg.drawImage(bp, 0, 0, W, H);
+      wg.globalCompositeOperation = 'destination-out'; // 옷 안쪽 깊은 곳은 빼고 가장자리 띠만 남긴다
+      wg.drawImage(ba, 0, 0, W, H);
+      wg.globalCompositeOperation = 'destination-in';  // 옷 바깥은 빼기
+      wg.drawImage(G, 0, 0);
+      wg.globalCompositeOperation = 'source-over';
+      g.save();
+      g.globalCompositeOperation = 'source-atop';
+      g.globalAlpha = 0.3;
+      g.drawImage(wrap, 0, 0);
+      g.restore();
+    }
+
+    // 2) 입자감: 라플라시안 크기의 중앙값으로 노이즈 세기를 잰다(내 사진 vs 옷)
+    const img = g.getImageData(0, 0, W, H);
+    const d = img.data;
+    const lumAt = (arr, i) => 0.299 * arr[i] + 0.587 * arr[i + 1] + 0.114 * arr[i + 2];
+    const sigma = (arr, pick) => {
+      const v = [];
+      for (let y = 2; y < H - 2; y += 3) for (let x = 2; x < W - 2; x += 3) {
+        const i = (y * W + x) * 4;
+        if (!pick(i)) continue;
+        const c = lumAt(arr, i);
+        const n4 = (lumAt(arr, i - 4) + lumAt(arr, i + 4) + lumAt(arr, i - W * 4) + lumAt(arr, i + W * 4)) / 4;
+        v.push(Math.abs(c - n4));
+      }
+      if (v.length < 200) return null;
+      v.sort((a, b) => a - b);
+      return (v[Math.floor(v.length / 2)] * 1.4826) / 1.118;
+    };
+    const opaque = (i) => d[i + 3] === 255 && d[i - 4 + 3] === 255 && d[i + 4 + 3] === 255 && d[i - W * 4 + 3] === 255 && d[i + W * 4 + 3] === 255;
+    const sg2 = sigma(d, opaque);
+    let sp = null;
+    if (photo) {
+      const pd = photo.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+      sp = sigma(pd, opaque); // 옷이 놓일 자리(원래 사진)의 입자감
+    }
+    if (sg2 != null && sp != null) {
+      const add = Math.min(8, Math.sqrt(Math.max(0, sp * sp - sg2 * sg2)));
+      if (add > 0.4) {
+        let seed = 12345;
+        const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+        for (let i = 0; i < d.length; i += 4) {
+          if (!d[i + 3]) continue;
+          const nz = (rnd() + rnd() + rnd() - 1.5) * 2 * add; // 대략 정규분포, 표준편차 ≈ add
+          d[i] = Math.max(0, Math.min(255, d[i] + nz));
+          d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + nz));
+          d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + nz));
+        }
+        g.putImageData(img, 0, 0);
+      }
+    }
+  }
+
   function composeScene(ctx, G, scene, geo) {
     const W = ctx.canvas.width, H = ctx.canvas.height;
     const gA = G.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
@@ -749,6 +1040,7 @@
       inpaint(img, W, (x, y) => hole(x, y) || under(x, y), box);
       ctx.putImageData(img, 0, 0);
     }
+    finishGarment(G, W, H);
     ctx.drawImage(G, 0, 0);
 
     // 손·팔뚝: 소매 안은 빼고 옷 위로
@@ -1140,6 +1432,18 @@
         });
         outer[0] = sp; // 소매 시작은 봉제선과 겨드랑이에 딱 붙인다(어깨 위로 튀어나오지 않게)
         inner[0] = ap;
+        // 팔을 들면(위팔이 아래 방향에서 45° 넘게 벌어지면) 소매 시작선을 어깨 봉제선을 축으로 돌려 위팔에 수직이 되게 한다.
+        // 그대로 두면 시작선은 "어깨 끝→겨드랑이"인데 소매는 위로 뻗어 비틀린 리본처럼 보인다
+        const upArm = norm(sub(elbow, sp));
+        const lift = 1 - dot(upArm, u); // 0 = 팔을 내림, 1 = 수평, 2 = 머리 위
+        if (lift > 0.3) {
+          let perp = V(-upArm.y, upArm.x);
+          if (dot(perp, sub(M, sp)) < 0) perp = mul(perp, -1); // 몸 쪽(겨드랑이 쪽)을 향하게
+          const rot = add(sp, mul(perp, len(sub(ap, sp))));
+          const t = Math.min(1, (lift - 0.3) / 0.7);
+          inner[0] = lerpV(ap, rot, t);
+          for (let j = 1; j < Math.min(3, inner.length); j++) inner[j] = lerpV(inner[j], add(outer[j], mul(perp, len(sub(inner[j], outer[j])))), t * (1 - j / 3));
+        }
         sleeves.push([...outer, ...inner.slice().reverse()]);
         sleeveTargets.push({ startX: sp.x, rib: outer.map((p, i) => [p, inner[i]]), poly: sleeves[sleeves.length - 1] });
         // 팔꿈치를 덮는 소매: 팔꿈치 안쪽에 짧은 주름(팔을 굽힐수록 진하게)
@@ -1324,6 +1628,10 @@
       pg.drawImage(ctx.canvas, 0, 0);
     }
     shadeK = opts.scene?.shadeK ?? 1;
+    // 팔을 들었거나 몸 앞을 가리면 옷 사진(팔 내린 모델)과 자세 차이가 커서, 하나로 휘면 몸판이 끌려간다 → 띠 방식
+    armsFront = (opts.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross' || k === 'face');
+    // 바지는 두 다리 사이 틈이 구불구불해져서 띠 방식이 낫다 → 상의에만 쓴다
+    useTPS = opts.tps !== false && opts.category === 'top' && !(opts.poseIssues || []).some((k) => k === 'armUp' || k === 'armCross');
     const drawFn = opts.category === 'top' ? drawTop : drawBottom;
     noMarks = !!(opts.texture && opts.texture.category === opts.category);
     if (!(opts.scene && photo)) return drawFn(ctx, opts);
