@@ -1701,13 +1701,19 @@
         const elbow = P(elI), wrist = P(wrI), finger = P(fiI);
         // 소매 길이는 봉제선(sp)부터 잰다. 관의 중심선은 진동 가운데(S0)에서 시작하므로 그만큼 길이를 맞춘다
         const armPath = [sp, elbow, wrist, finger];
-        const S0 = mid(sp, ap);
+        // 팔을 내리고 있으면(lift 작음) 진동(어깨 끝→겨드랑이)은 팔과 나란한 세로선이다. 그 길이를 소매 단면 폭으로 쓰면
+        // 소매가 옆으로 10cm쯤 튀어나와 어깨 패드처럼 보인다 → 소매는 위팔 중심(어깨 관절 쪽)에서 시작해 팔 굵기만큼만
+        const lift0 = 1 - dot(norm(sub(elbow, sp)), u);
+        const hang = Math.max(0, Math.min(1, 1 - lift0 / 0.3));
+        const S0 = lerpV(mid(sp, ap), lerpV(mid(sp, ap), P(shI), 0.7), hang);
         const tubePath = [S0, elbow, wrist, finger];
         const toWrist = arcTo(armPath, wrist);
         const L = g.sleeve * s;
         const Lc = Math.max(L * 0.3, L - (toWrist - arcTo(tubePath, wrist)));
         const { pts } = walk(tubePath, Lc, 16);
-        const startW = Math.max(len(sub(sp, ap)), 11 * s);
+        const armholeW = Math.max(len(sub(sp, ap)), 11 * s);
+        const hangW = Math.max(12 * s, Math.min(armholeW * 0.62, 18 * s)); // 내린 팔의 소매 폭(위팔 + 여유)
+        const startW = lerp(armholeW, hangW, hang);
         // 소매 끝은 겨드랑이보다 좁다(반팔도 끝으로 갈수록 좁아져야 상자처럼 안 보인다)
         const endW = g.sleeve > 40 ? Math.max(startW * 0.55, 8 * s) : Math.max(startW * 0.72, 10 * s);
         const outer = [], inner = [];
