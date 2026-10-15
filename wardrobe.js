@@ -264,6 +264,7 @@ async function runOutfit() {
         category: 'bottom', g: itemRow(bottom), color: DEFAULT_COLOR.bottom, stretch: bottom.stretch, body: bodyForRender(),
         texture: cut && cut.category === 'bottom' ? cut : null,
         lm: model.pose, W: tmp.width, H: tmp.height, mirror: false, pxPerCm: model.pxPerCm, scene: null,
+        seg: model.scene || null, // 실제 가랑이 위치(본 그리기와 같게)
       });
       waistTop = r0.ok ? r0.waistTop : null;
     }

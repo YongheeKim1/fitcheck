@@ -969,7 +969,18 @@
       const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy || 1)));
       return Math.hypot(x - a.x - dx * t, y - a.y - dy * t);
     };
-    const inAnkle = (x, y) => geo.ankles.legs.some(([a, b]) => segDist(x, y, a, b) < geo.ankles.r);
+    // 다리 둘레 안 정도(0 = 가운데 선, 1 = 가장자리, 1 넘으면 밖): 무릎에서 발목으로 가늘어진다
+    const legT = (x, y) => {
+      let best = Infinity;
+      for (const sg of geo.ankles.segs) {
+        const dx = sg.b.x - sg.a.x, dy = sg.b.y - sg.a.y;
+        const t = Math.max(0, Math.min(1, ((x - sg.a.x) * dx + (y - sg.a.y) * dy) / (dx * dx + dy * dy || 1)));
+        const dd = Math.hypot(x - sg.a.x - dx * t, y - sg.a.y - dy * t) / (sg.ra + (sg.rb - sg.ra) * t);
+        if (dd < best) best = dd;
+      }
+      return best;
+    };
+    const inAnkle = (x, y) => legT(x, y) < 1;
     // 새 바지 밑단 아래(발목까지) 원래 바지 / 새 바지 허리 위(허리선 아래) 원래 바지
     const belowHem = (x, y) => origC && gBottom[x] >= 0 && y > gBottom[x] && y <= geo.ankles.yMax;
     let gTop = null;
@@ -1159,17 +1170,19 @@
         if (gBottom[x] < 0) continue;
         for (let y = gBottom[x] + 1; y < H; y++) {
           const i = y * W + x;
-          if (y > geo.ankles.yMax || !inAnkle(x, y) || !isOrig(x, y)) continue;
-          ank.push(i);
-          lum += d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2];
+          if (y > geo.ankles.yMax || !isOrig(x, y)) continue;
+          const t = legT(x, y);
+          if (t >= 1) continue;
+          ank.push(i, t);
         }
       }
       if (ank.length) {
-        lum /= ank.length;
-        const [r, g2, b] = scene.skinColor;
-        for (const i of ank) {
-          const f = Math.min(1.12, Math.max(0.7, (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / (lum || 1)));
-          d[i * 4] = r * f; d[i * 4 + 1] = g2 * f; d[i * 4 + 2] = b * f;
+        // 드러난 다리: 원래 바지의 무늬 대신 원통 명암(가운데 밝고 가장자리 어둡게)의 피부. 색은 손·팔 피부
+        const [r, g2, b] = scene.handColor || scene.skinColor;
+        for (let k = 0; k < ank.length; k += 2) {
+          const i = ank[k], t = ank[k + 1];
+          const f = 0.62 + 0.45 * Math.sqrt(Math.max(0, 1 - t * t));
+          d[i * 4] = Math.min(255, r * f); d[i * 4 + 1] = Math.min(255, g2 * f); d[i * 4 + 2] = Math.min(255, b * f);
         }
         ctx.putImageData(img, 0, 0);
       }
@@ -1361,7 +1374,21 @@
     const give = 1 + STRETCH[o.stretch || 'none'];
     const notes = [];
 
-    const C = add(hipMid, mul(u, thighLen * 0.1));   // 가랑이
+    // 가랑이: 사진의 사람 분할에서 두 다리가 실제로 갈라지는 높이(가운데 세로줄에서 배경이 3줄 이어지는 첫 곳).
+    // 바지는 여기서 밑위만큼 올라간 허리에 걸리고 총장은 그 허리에서 잰다. 분할이 없으면 관절 기준 어림값
+    let C = add(hipMid, mul(u, thighLen * 0.1));
+    if (o.seg) {
+      const { cat, w, h } = o.seg;
+      const col = Math.floor(((o.seg.mirror ? o.W - 1 - hipMid.x : hipMid.x) * w) / o.W);
+      const r0 = Math.max(0, Math.floor((hipMid.y * h) / o.H)), r1 = Math.min(h - 3, Math.ceil(((hipMid.y + thighLen * 0.4) * h) / o.H));
+      for (let r = r0; col >= 0 && col < w && r <= r1; r++) {
+        if (cat[r * w + col] === 0 && cat[(r + 1) * w + col] === 0 && cat[(r + 2) * w + col] === 0) {
+          const yC = (r * o.H) / h + 0.5 * s; // 바지 가랑이는 몸 가랑이 바로 아래
+          if (yC > hipMid.y && yC < hipMid.y + thighLen * 0.35) C = add(hipMid, mul(u, (yC - hipMid.y) / (u.y || 1)));
+          break;
+        }
+      }
+    }
     const T = sub(C, mul(u, g.rise * s));            // 허리 밴드 위
     const Hl = sub(C, mul(u, g.rise * s * 0.35));    // 엉덩이 높이
     const gHip = g.hip ?? (g.waist + g.thigh) / 1.5;
@@ -1523,7 +1550,7 @@
     // 밑단 아래 원래 바지를 지울 수 있는 가장 낮은 줄: 발목과 발꿈치 사이(그 아래는 신발)
     const ankY = Math.max(P(27).y, P(28).y);
     const ankleMax = ankY + 0.85 * Math.max(0, Math.max(P(29).y, P(30).y, P(31).y, P(32).y) - ankY);
-    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax, legs: [[P(25), P(29)], [P(26), P(30)]], r: 3.6 * s }, bandTop: T.y }, waistTop: add(T, mul(u, D0)) };
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax, segs: [[25, 27, 29], [26, 28, 30]].flatMap(([k, a, h]) => [{ a: P(k), b: P(a), ra: 5.2 * s, rb: 3.4 * s }, { a: P(a), b: P(h), ra: 3.4 * s, rb: 3.2 * s }]) }, bandTop: T.y }, waistTop: add(T, mul(u, D0)) };
   }
 
   // ---------------- 상의 ----------------

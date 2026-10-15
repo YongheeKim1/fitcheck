@@ -410,16 +410,38 @@ function fromModelPhoto(pose, W, H, clothes, img, category) {
   const coverFill = visibleY > topY + 3
     ? { poly: [...waistRibbon.map((r) => r[0]), ...waistRibbon.slice().reverse().map((r) => r[1])], yMax: visibleY + 3 }
     : null;
+  // 바지 색(허벅지 쪽 평균): 다리 끝을 찾을 때 신발·양말(분할이 옷으로 잡는 경우가 있다)을 바지로 착각하지 않게
+  let pr = 0, pg = 0, pb = 0, pn = 0;
+  for (const leg of [[23, 25], [24, 26]].map((ids) => ids.map(P))) {
+    for (let k = 0.2; k <= 0.8; k += 0.1) {
+      const q = V(leg[0].x + (leg[1].x - leg[0].x) * k, leg[0].y + (leg[1].y - leg[0].y) * k);
+      for (let o = -4; o <= 4; o += 2) {
+        if (!mask(q.x + o, q.y)) continue;
+        const i = (Math.round(q.y) * W + Math.round(q.x + o)) * 4;
+        pr += D[i]; pg += D[i + 1]; pb += D[i + 2]; pn++;
+      }
+    }
+  }
+  const pantsC = pn > 10 ? [pr / pn, pg / pn, pb / pn] : null;
+  const isPants = (x, y) => {
+    if (!mask(x, y)) return false;
+    if (!pantsC) return true;
+    const i = (Math.round(y) * W + Math.round(x)) * 4;
+    return Math.hypot(D[i] - pantsC[0], D[i + 1] - pantsC[1], D[i + 2] - pantsC[2]) < 95;
+  };
   const legs = [[23, 25, 27], [24, 26, 28]].map((ids) => ids.map(P)).sort((a, b) => a[0].x - b[0].x).map((leg, si) => {
     const outward = si === 0 ? -1 : 1;
     const start = V(leg[0].x, crotchY);
     const path = [start, leg[1], leg[2], V(leg[2].x, H)];
-    let end = 0, seen = false;
+    let end = 0, seen = false, most = 0;
     const total = pathLen(path);
     for (let d = 0; d <= total; d += 2) {
       const { p } = GS.along(path, d);
-      let hit = false;
-      for (let o = -shoulderW * 0.15; o <= shoulderW * 0.15; o += 2) if (mask(Math.round(p.x + o), Math.round(p.y))) { hit = true; break; }
+      // 바지 천이 이 줄에서 지금까지 가장 넓었던 폭의 35% 이상일 때만 바지(밑단 아래 늘어진 조각·신발 끝은 제외)
+      let cnt = 0;
+      for (let o = -shoulderW * 0.3; o <= shoulderW * 0.3; o += 2) if (isPants(Math.round(p.x + o), Math.round(p.y))) cnt++;
+      most = Math.max(most, cnt);
+      const hit = cnt > 0 && cnt >= most * 0.35;
       if (hit) { end = d; seen = true; } else if (seen && d > end + 10) break;
     }
     // 안쪽은 두 다리 사이 가운데선까지만
