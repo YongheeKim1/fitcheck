@@ -36,10 +36,12 @@ const Avatar3D = (() => {
         body: { ref: arr('body.ref'), uv: arr('body.uv'), tris: arr('body.tris') },
         brief: { ref: arr('brief.ref'), uv: arr('brief.uv'), tris: arr('brief.tris') },
         w: Object.fromEntries(['armL', 'armR', 'foreL', 'foreR', 'legL', 'legR', 'handL', 'handR', 'head'].map((k) => [k, arr('w.' + k)])),
+        fingers: Object.fromEntries((meta.fingers || []).map((nm) => [nm, { idx: arr(`f.${nm}.idx`), w: arr(`f.${nm}.w`) }])),
         proxies: meta.proxies.map((p) => ({ ...p, vi: arr(`p.${p.name}.vi`), pw: arr(`p.${p.name}.w`), ref: arr(`p.${p.name}.ref`), uv: arr(`p.${p.name}.uv`), tris: arr(`p.${p.name}.tris`) })),
       };
       data.skinAvg = avgColor(tex['skin.jpg'].image);
-      data.hairAvg = avgColor(tex[meta.proxies.find((p) => p.kind === 'hair').tex].image, true);
+      data.hairAvg = {};
+      for (const p of meta.proxies) if (p.kind === 'hair') data.hairAvg[p.name] = avgColor(tex[p.tex].image, true);
       return data;
     })();
     try { return await loading; } finally { loading = null; }
@@ -179,7 +181,7 @@ const Avatar3D = (() => {
 
   // ---------- 자세: 팔은 몸 옆으로, 다리는 골반 너비로(관절 중심 회전, 뼈 가중치로 섞기) ----------
   // 정면(z축) 회전만 쓴다. rot[이름](점)은 관절 좌표(랜드마크)에 같은 회전을 적용
-  function poseLimbs(P0, armDeg, legDeg, handTwist = 5) {
+  function poseLimbs(P0, armDeg, legDeg, handTwist = 5, foreAdd = 4) {
     let P = P0;
     const rot = {};
     const turn = (P, pivot, child, W, deg, sign, extra) => {
@@ -201,7 +203,7 @@ const Avatar3D = (() => {
       // 위팔(팔 전체)을 내리고, 바깥으로 꺾인 아래팔을 위팔 방향에 가깝게 편다
       const r1 = turn(P, `upperarm01.${sd}____head`, `lowerarm01.${sd}____head`, data.w['arm' + sd], armDeg, sign);
       P = r1.P;
-      const r2 = turn(P, `lowerarm01.${sd}____head`, `wrist.${sd}____head`, data.w['fore' + sd], armDeg + 4, sign, r1.f);
+      const r2 = turn(P, `lowerarm01.${sd}____head`, `wrist.${sd}____head`, data.w['fore' + sd], armDeg + foreAdd, sign, r1.f);
       P = r2.P;
       rot['arm' + sd] = r1.f;
       rot['fore' + sd] = (p) => r2.f(r1.f(p));
@@ -232,6 +234,59 @@ const Avatar3D = (() => {
     return { P, rot };
   }
 
+  // ---------- 손: 손가락을 모으고 살짝 굽힌 편안한 손(차렷 자세의 손) ----------
+  // 마디마다(끝 마디부터) 원래 관절 위치를 축으로 돌린다 → 정방향 운동학과 같다
+  const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const nrm3 = (a) => { const l = Math.hypot(...a) || 1; return a.map((v) => v / l); };
+  const crs3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  function rodrigues(u, deg) {
+    const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+    return (x, y, z) => {
+      const d = u[0] * x + u[1] * y + u[2] * z;
+      return [x * c + (u[1] * z - u[2] * y) * s + u[0] * d * (1 - c), y * c + (u[2] * x - u[0] * z) * s + u[1] * d * (1 - c), z * c + (u[0] * y - u[1] * x) * s + u[2] * d * (1 - c)];
+    };
+  }
+  function relaxHands(P0, curl = HAND_CURL) {
+    if (!data.fingers['finger2-1.L']) return P0;
+    const P = new Float32Array(P0);
+    for (const sd of ['L', 'R']) {
+      const jn = (n) => jpos(P0, n);
+      const wr = jn(`wrist.${sd}____head`);
+      // 손바닥 법선: (손목→가운뎃손가락) × (검지→새끼) — 손바닥 쪽을 향하게 부호를 맞춘다
+      const d = nrm3(sub3(jn(`finger3-1.${sd}____head`), wr));
+      const across = nrm3(sub3(jn(`finger5-1.${sd}____head`), jn(`finger2-1.${sd}____head`)));
+      let pn = nrm3(crs3(d, across));
+      if (sd === 'R') pn = pn.map((v) => -v);
+      pn = pn.map((v) => v * curl.palmSign);
+      const rotSeg = (nm, deg, axisFn) => {
+        const f = data.fingers[nm];
+        if (!f || !deg) return;
+        const h = jpos(P0, nm + '____head'), t = jpos(P0, nm + '____tail');
+        const ax = axisFn(nrm3(sub3(t, h)));
+        const R = rodrigues(ax, deg);
+        // 이미 굽은(끝 마디) 정점도 같이 돌려야 하므로 현재 P에서 돌리고, 축 위치는 아직 안 돌린 마디 관절(원래 자리)
+        for (let j = 0; j < f.idx.length; j++) {
+          const i = f.idx[j] * 3, w = f.w[j] / 255;
+          const q = R(P[i] - h[0], P[i + 1] - h[1], P[i + 2] - h[2]);
+          P[i] += w * (h[0] + q[0] - P[i]); P[i + 1] += w * (h[1] + q[1] - P[i + 1]); P[i + 2] += w * (h[2] + q[2] - P[i + 2]);
+        }
+      };
+      const bend = (dir) => nrm3(crs3(dir, pn));
+      for (let f = 2; f <= 5; f++) {
+        const spread = (f - 3.2) * curl.close; // 손가락 사이를 모은다(가운데로)
+        for (let s = 3; s >= 1; s--) rotSeg(`finger${f}-${s}.${sd}`, curl.seg[s - 1] + (f - 2) * curl.more, bend);
+        rotSeg(`finger${f}-1.${sd}`, spread * (sd === 'L' ? 1 : -1), () => pn);
+      }
+      // 엄지: 검지 옆으로 붙이고 살짝 굽힌다
+      for (let s = 3; s >= 2; s--) rotSeg(`finger1-${s}.${sd}`, curl.thumb[s - 1], bend);
+      rotSeg(`finger1-1.${sd}`, curl.thumb[0] * (sd === 'L' ? 1 : -1), () => d);
+      rotSeg(`finger1-1.${sd}`, curl.thumbIn * (sd === 'L' ? 1 : -1), () => pn);
+    }
+    return P;
+  }
+  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02' };
+  const HAND_CURL = { palmSign: -1, seg: [10, 25, 12], more: 2, close: 3, thumb: [0, 10, 10], thumbIn: -60 };
+
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
   function normals(P) {
     const N = new Float32Array(P.length), t = data.normTris;
@@ -247,7 +302,7 @@ const Avatar3D = (() => {
   }
 
   // 덧붙이는 메시 좌표: 기준 몸 정점 3개의 가중 평균 + 오프셋(몸 크기에 비례)
-  function proxyPos(p, P) {
+  function proxyPos(p, P, thick = 1) {
     const n = p.vi.length / 3, out = new Float32Array(n * 3);
     const sc = {};
     for (const ax of ['x', 'y', 'z']) { const [a, b, ref] = p.scale[ax]; const k = { x: 0, y: 1, z: 2 }[ax]; sc[ax] = Math.abs(P[a * 3 + k] - P[b * 3 + k]) / ref; }
@@ -255,7 +310,7 @@ const Avatar3D = (() => {
       for (let k = 0; k < 3; k++) {
         let v = 0;
         for (let j = 0; j < 3; j++) v += p.pw[i * 6 + j] * P[p.vi[i * 3 + j] * 3 + k];
-        out[i * 3 + k] = v + p.pw[i * 6 + 3 + k] * sc['xyz'[k]];
+        out[i * 3 + k] = v + p.pw[i * 6 + 3 + k] * sc['xyz'[k]] * thick;
       }
     }
     return out;
@@ -294,6 +349,30 @@ const Avatar3D = (() => {
     return env;
   }
 
+  // 머리카락 그늘: 머리 피부 정점마다 가장 가까운 머리카락 정점까지 거리(cm) → 가까울수록 1
+  function hairShade(H, P) {
+    const C = 2, cells = new Map(), key = (x, y, z) => x + ',' + y + ',' + z;
+    for (let i = 0; i < H.length; i += 3) {
+      const k = key(Math.floor(H[i] / C), Math.floor(H[i + 1] / C), Math.floor(H[i + 2] / C));
+      let a = cells.get(k); if (!a) cells.set(k, (a = [])); a.push(i);
+    }
+    const ref = data.body.ref, hw = data.w.head, out = new Float32Array(ref.length);
+    for (let j = 0; j < ref.length; j++) {
+      const r = ref[j];
+      if (hw[r] < 30) continue;
+      const x = P[r * 3], y = P[r * 3 + 1], z = P[r * 3 + 2];
+      const cx = Math.floor(x / C), cy = Math.floor(y / C), cz = Math.floor(z / C);
+      let d2 = Infinity;
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+        const L = cells.get(key(cx + a, cy + b, cz + c)); if (!L) continue;
+        for (const i of L) { const dx = H[i] - x, dy = H[i + 1] - y, dz = H[i + 2] - z; const q = dx * dx + dy * dy + dz * dz; if (q < d2) d2 = q; }
+      }
+      const d = Math.sqrt(d2), t = Math.min(1, Math.max(0, (d - 0.15) / 0.9));
+      out[j] = 1 - t * t * (3 - 2 * t);
+    }
+    return out;
+  }
+
   const hexRGB = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
 
   // ---------- 아바타 만들기 ----------
@@ -308,7 +387,22 @@ const Avatar3D = (() => {
     // 단위 맞추기: cm, 바닥 y=0, 가운데 x=0
     const cmP = new Float32Array(P.length);
     for (let i = 0; i < P.length; i += 3) { cmP[i] = P[i] * k; cmP[i + 1] = (P[i + 1] - meas.minY) * k; cmP[i + 2] = P[i + 2] * k; }
-    const posed = poseLimbs(cmP, 6.5, 2.5);
+    const cmH = relaxHands(cmP);
+    // 머리를 조금 작게(정수리 기준으로 줄여 키는 그대로): 어깨에 비해 머리가 커 보이던 것
+    if (POSE.head !== 1) {
+      const hw0 = data.w.head;
+      let top = -Infinity;
+      for (let i = 0; i < hw0.length; i++) if (hw0[i] > 200 && cmH[i * 3 + 1] > top) top = cmH[i * 3 + 1];
+      const c0 = jpos(cmH, 'head____tail'), cz = jpos(cmH, 'neck03____head');
+      for (let i = 0; i < hw0.length; i++) {
+        const w = hw0[i] / 255; if (!w) continue;
+        const f = 1 - (1 - POSE.head) * w;
+        cmH[i * 3] = c0[0] + (cmH[i * 3] - c0[0]) * f;
+        cmH[i * 3 + 1] = top + (cmH[i * 3 + 1] - top) * f;
+        cmH[i * 3 + 2] = cz[2] + (cmH[i * 3 + 2] - cz[2]) * f;
+      }
+    }
+    const posed = poseLimbs(cmH, POSE.arm, POSE.leg, POSE.twist, POSE.fore);
     P = posed.P;
     const N = normals(P);
 
@@ -339,10 +433,11 @@ const Avatar3D = (() => {
     const briefU = { uTop: { value: hipY + 7.5 }, uBot: { value: crotchY - 7 }, uHalf: { value: GarmentRender.visW(m.hip, 'hip') / 2 + 4 } };
     skinMat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, briefU);
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nvarying vec3 vRest;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nuniform float uTop, uBot, uHalf;\nfloat briefM;')
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nvarying vec3 vRest;\nvarying float vHairOcc;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nuniform float uTop, uBot, uHalf;\nfloat briefM;')
         .replace('#include <map_fragment>', `#include <map_fragment>
+          diffuseColor.rgb *= 1.0 - 0.4 * vHairOcc; // 앞머리·옆머리 바로 아래 피부 그늘
           {
             float e = max(fwidth(vRest.y), 0.05);
             float ax = abs(vRest.x);
@@ -359,19 +454,22 @@ const Avatar3D = (() => {
         .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.92, briefM);')
         .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\nmaterial.sheenColor *= 1.0 - briefM;\nmaterial.clearcoat *= 1.0 - briefM;');
     };
-    const hairRGB = hexRGB(pc?.hair?.hex || '#241a16');
+    const hairRGB = hexRGB(pc?.hair?.hex || '#1e1712');
     const headParts = [];
+    const hairName = data.proxies.some((p) => p.name === POSE.hair) ? POSE.hair : 'short02';
     for (const p of data.proxies) {
-      const PP = proxyPos(p, P);
+      if (p.kind === 'hair' && p.name !== hairName) continue;
+      const PP = proxyPos(p, P, p.kind === 'hair' ? POSE.hairThick : 1); // 머리카락은 두피에 더 붙여 헬멧처럼 부풀지 않게
       const g = geom(p.ref, p.uv, p.tris, PP, null);
+      if (p.kind === 'hair') body.geometry.setAttribute('hairOcc', new THREE.BufferAttribute(hairShade(PP, P), 1));
       let mat;
       if (p.kind === 'hair') {
-        const ht = hairRGB.map((v, i) => Math.max(0.05, Math.min(2.5, v / Math.max(8, data.hairAvg[i]))));
-        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(1.2, 1.2), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, sheen: 0.25, sheenRoughness: 0.5, sheenColor: new THREE.Color(0.3, 0.26, 0.24), alphaTest: 0.3, side: THREE.DoubleSide });
+        const ht = hairRGB.map((v, i) => Math.max(0.05, Math.min(2.5, v / Math.max(8, data.hairAvg[p.name][i]))));
+        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], ...(p.name === 'short02' ? { normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(0.45, 0.45) } : {}), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, specularIntensity: 0.35, sheen: 0.35, sheenRoughness: 0.4, sheenColor: new THREE.Color(0.4, 0.32, 0.26), alphaTest: 0.55, side: THREE.DoubleSide });
       } else if (p.kind === 'brow' || p.kind === 'lash') {
-        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(hairRGB[0] / 255 * 0.5, hairRGB[1] / 255 * 0.5, hairRGB[2] / 255 * 0.5) : new THREE.Color(0.2, 0.17, 0.16), roughness: 0.8, transparent: true, opacity: p.kind === 'brow' ? 1 : 0.9, alphaTest: 0.05, depthWrite: false, side: THREE.DoubleSide });
+        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(hairRGB[0] / 255 * 0.5, hairRGB[1] / 255 * 0.5, hairRGB[2] / 255 * 0.5) : new THREE.Color(0.06, 0.05, 0.045), roughness: 0.8, transparent: true, opacity: 1, alphaTest: 0.05, depthWrite: false, side: THREE.DoubleSide });
       } else if (p.kind === 'eye') {
-        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.05, transparent: true, alphaTest: 0.02 });
+        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 3, transparent: true, alphaTest: 0.02 }); // 소프트박스가 눈에 비친 반짝임
       } else {
         mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], roughness: 0.7 });
       }
@@ -382,6 +480,12 @@ const Avatar3D = (() => {
       mesh.renderOrder = p.kind === 'brow' || p.kind === 'lash' ? 2 : 1;
       scene.add(mesh);
       if (p.kind !== 'shoes') headParts.push(mesh);
+      if (p.kind === 'hair') {
+        // 머리카락 끝(반투명한 가닥)은 섞어 그려 앞머리 끝이 톱니처럼 잘리지 않고 가늘게 흩어지게
+        const soft = new THREE.Mesh(g, Object.assign(mat.clone(), { alphaTest: 0.04, transparent: true, depthWrite: false }));
+        soft.userData.kind = 'hair'; soft.renderOrder = 3; soft.receiveShadow = true;
+        scene.add(soft); headParts.push(soft);
+      }
     }
 
     // 내 얼굴을 넣으면 3D 눈썹·속눈썹·눈은 숨긴다(사진 얼굴이 덮는다). 3D 머리카락은 남겨 사진이 못 덮은 정수리를 채운다
@@ -392,17 +496,17 @@ const Avatar3D = (() => {
     // 조명: 왼쪽 위 앞 주광(그림자) + 오른쪽 보조광 + 뒤 윤곽광 + 하늘/바닥 반사
     scene.add(new THREE.HemisphereLight(0xfff6ee, 0x6a5a52, 0.18));
     const key = new THREE.DirectionalLight(0xfff1e4, 2.2);
-    key.position.set(-40, 170, 520); key.castShadow = true; // 거의 정면 위: 손·팔 그림자가 몸 뒤로 떨어지게
-    key.shadow.mapSize.set(2048, 2048);
+    key.position.set(-25, 240, 500); key.castShadow = true; // 거의 정면 위: 손·팔 그림자가 몸 뒤로 떨어지게
+    key.shadow.mapSize.set(1024, 1024);
     Object.assign(key.shadow.camera, { left: -60, right: 60, top: 200, bottom: -10, near: 10, far: 900 });
-    key.shadow.bias = -0.0004; key.shadow.normalBias = 0.6; key.shadow.radius = 4;
+    key.shadow.bias = -0.0004; key.shadow.normalBias = 0.6; key.shadow.radius = 18; key.shadow.blurSamples = 24;
     scene.add(key);
     const fill = new THREE.DirectionalLight(0xe8eeff, 0.45); fill.position.set(200, 80, 200); scene.add(fill);
     const rim = new THREE.DirectionalLight(0xffffff, 1.1); rim.position.set(60, 200, -250); scene.add(rim);
 
     if (!renderer) {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-      renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.VSMShadowMap; // 부드러운 그림자(손·턱 그림자 가장자리)
     }
     renderer.setPixelRatio(1);
     renderer.setSize(CW * SS, CH * SS, false);
@@ -487,6 +591,29 @@ const Avatar3D = (() => {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     for (const [o, mt] of saved) { o.material.dispose(); o.material = mt; }
     scene.remove(headMesh, occ);
+    // 팔·손만 있는 층(옷 위에 다시 얹는 손): 손 둘레 원통으로 오리면 손 옆의 속옷·허벅지까지 옷 위로 올라온다
+    let armsSkin = null;
+    {
+      const armTris = [], wa = data.w.armL, wb = data.w.armR;
+      const isArm = (k) => wa[br[k]] + wb[br[k]] > 100;
+      for (let i = 0; i < bt.length; i += 3) if (isArm(bt[i]) && isArm(bt[i + 1]) && isArm(bt[i + 2])) armTris.push(bt[i], bt[i + 1], bt[i + 2]);
+      const armMesh = new THREE.Mesh(body.geometry.clone().setIndex(armTris), Object.assign(flat(0xffffff), { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+      const vis = scene.children.filter((o) => o.isMesh).map((o) => [o, o.visible]);
+      vis.forEach(([o]) => { o.visible = o === body; });
+      const bm = body.material; body.material = flat(0x000000);
+      scene.add(armMesh);
+      renderer.toneMapping = THREE.NoToneMapping;
+      const am = shot();
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      scene.remove(armMesh); armMesh.material.dispose(); armMesh.geometry.dispose();
+      body.material.dispose(); body.material = bm;
+      vis.forEach(([o, v]) => { o.visible = v; });
+      const ad = am.getContext('2d').getImageData(0, 0, CW, CH);
+      const fd = full.getContext('2d').getImageData(0, 0, CW, CH);
+      for (let i = 0; i < ad.data.length; i += 4) fd.data[i + 3] = Math.min(fd.data[i + 3], ad.data[i]);
+      armsSkin = document.createElement('canvas'); armsSkin.width = CW; armsSkin.height = CH;
+      armsSkin.getContext('2d').putImageData(fd, 0, 0);
+    }
 
     // 내 얼굴 붙이기: 사진 얼굴 폭을 3D 얼굴 폭(광대 사이)에, 턱을 3D 턱에, 가운데를 몸 가운데에 맞춘다
     let facePaste = null;
@@ -554,7 +681,7 @@ const Avatar3D = (() => {
 
     // 관절 좌표(MediaPipe 33점 순서, 0~1). 11 = 사람의 왼쪽 어깨(화면 오른쪽, MakeHuman L)
     const J = (name, part) => { let p = jpos(P0(), name); if (part) p = posed.rot[part](p); return toPx(p); };
-    const cmCache = cmP;
+    const cmCache = cmH;
     function P0() { return cmCache; }
     const lm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 1 }));
     const set = (i, p) => { lm[i] = { x: p.x / CW, y: p.y / CH, visibility: 1 }; };
@@ -587,7 +714,7 @@ const Avatar3D = (() => {
     const sceneOut = {
       cat, w: sw, h: sh,
       skinColor, handColor: skinColor,
-      head, skin: full, others: null,
+      head, skin: full, armsSkin, others: null, // armsSkin: 팔·손만(옷 위에 다시 얹을 때)
       illum: { rgb: [244, 242, 238], Y: 243 },
       tilt: -0.15, shadeK: 1,
       isAvatar: true,
@@ -596,7 +723,7 @@ const Avatar3D = (() => {
     return { canvas, pose: lm, pxPerCm: s, scene: sceneOut, poseCheck: { ok: true, issues: [] }, isAvatar: true, is3D: true, measures: m, fitted: meas, hasFace: !!face?.img };
   }
 
-  return { load, build, fit, measure, morph };
+  return { load, build, fit, measure, morph, HAND_CURL, POSE };
 })();
 
 // 내 체형 탭의 아바타 카드를 3D로 바꿔 그리기(첫 화면을 막지 않게 한가할 때)

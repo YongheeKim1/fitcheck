@@ -1298,7 +1298,7 @@
       }
     }
     fg.globalCompositeOperation = 'source-in';
-    fg.drawImage(scene.skin, 0, 0, W, H);
+    fg.drawImage(scene.armsSkin || scene.skin, 0, 0, W, H); // 아바타는 팔·손만 있는 층
     fg.globalCompositeOperation = 'source-over';
     ctx.drawImage(front, 0, 0);
     // 손에 든 물건(휴대폰 등): 손 둘레 안의 소품 픽셀만

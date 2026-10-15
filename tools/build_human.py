@@ -109,6 +109,15 @@ for c0 in range(0, len(_helpers), 512):
     _near[c0:c0 + 512] = _used[d.argmin(1)]
 for arrw in list(pose.values()) + [headW]:
     arrw[_helpers] = arrw[_near]
+# 손가락 마디(자연스럽게 살짝 쥔 손): 마디마다 아래쪽 전체 가중치(듬성듬성 저장)
+fingerW = {}
+for sd in ['L', 'R']:
+    for f in range(1, 6):
+        for s in range(1, 4):
+            nm = 'finger%d-%d.%s' % (f, s, sd)
+            w = weight_of(subtree(nm))
+            w[_helpers] = w[_near]
+            fingerW[nm] = w
 
 def jpos(name, X):
     return X[joints[name]].mean(axis=0)
@@ -156,12 +165,14 @@ def load_clo(name, objname=None):
     return sc, ref, dele, ts, fs
 
 proxies = []
+HAIR_ALT = [h for h in os.environ.get('HAIR_ALT', '').split(',') if h and os.path.exists(P(h + '.mhclo'))]  # 비교용 머리 모양(시험할 때만)
 def add_proxy(name, tex, objname=None, kind='hair'):
     sc, ref, dele, ts, fs = load_clo(name, objname)
     r, ruv, tris = split(fs, ts)
     proxies.append({'name': name, 'tex': tex, 'kind': kind, 'scale': sc, 'ref': ref, 'split': r, 'uv': ruv, 'tris': tris, 'delete': dele})
 
 add_proxy('short02', 'hair.png', kind='hair')
+for _h in HAIR_ALT: add_proxy(_h, 'hair_%s.png' % _h, kind='hair')
 add_proxy('eyebrow001', 'eyebrow.png', kind='brow')
 add_proxy('eyelashes01', 'lashes.png', kind='lash')
 add_proxy('eyes', 'eye.png', kind='eye')
@@ -216,6 +227,11 @@ for nm in ['upperarm01.L____head', 'upperarm01.R____head', 'lowerarm01.L____head
            'foot.L____tail', 'foot.R____tail', 'toe3-1.L____head', 'toe3-1.R____head', 'eye.L____head', 'eye.R____head', 'head____tail', 'neck01____head',
            'special04____head', 'jaw____tail', 'breast.L____head', 'finger2-3.L____tail', 'finger2-3.R____tail', 'spine03____head', 'neck03____head']:
     LM[nm] = joints[nm]
+for nm in fingerW:
+    LM[nm + '____head'] = joints[nm + '____head']
+    LM[nm + '____tail'] = joints[nm + '____tail']
+for sd in ['L', 'R']:
+    LM['wrist.%s____head' % sd] = joints['wrist.%s____head' % sd]
 
 # ---------- 바이너리 ----------
 buf = bytearray()
@@ -232,6 +248,12 @@ put('body.ref', b_ref, np.uint32); put('body.uv', b_uv.ravel(), np.float32); put
 put('brief.ref', w_ref, np.uint32); put('brief.uv', w_uv.ravel(), np.float32); put('brief.tris', w_tris, np.uint32)
 for k, w in list(pose.items()) + [('head', headW)]:
     put('w.' + k, np.round(w * 255).astype(np.uint8), np.uint8)
+meta['fingers'] = []
+for nm, w in fingerW.items():
+    nz = np.nonzero(w > 0.004)[0]
+    put('f.%s.idx' % nm, nz.astype(np.uint16), np.uint16)
+    put('f.%s.w' % nm, np.round(w[nz] * 255).astype(np.uint8), np.uint8)
+    meta['fingers'].append(nm)
 meta['morphs'] = {}
 for k, (inc, dec) in PAIRS.items():
     for sgn, nm in (('+', inc), ('-', dec)):
@@ -264,11 +286,106 @@ def save(src, dst, size, alpha=False):
     im = im.resize((size, size), Image.LANCZOS)
     if alpha: im.save(os.path.join(OUT, dst), optimize=True)
     else: im.convert('RGB').save(os.path.join(OUT, dst), quality=86, optimize=True)
-save('skin_diffuse.png', 'skin.jpg', 2048)
-save('short02_diffuse.png', 'hair.png', 1024, True)
+def even_skin(src, dst):
+    # 피부 고르게: 얼굴·몸·다리가 한 사람처럼 같은 톤이 되게 큰 흐림(저주파 색)을 가슴 색으로 바꾸고
+    # 잔결(모공·주름)은 비율로 남긴다. 다리 털·배꼽 아래 털·유두는 결을 약하게, 입술은 그대로.
+    from PIL import ImageFilter
+    im = Image.open(P(src)).convert('RGB')
+    a = np.asarray(im).astype(np.float32)
+    # 빈 바탕(단색)은 빼고 흐린다(조각 가장자리에 빛 테두리가 생기지 않게)
+    H, W = a.shape[:2]
+    m = (np.abs(a - a[5, 5]).max(-1) > 2).astype(np.float32)
+    def box(x, r, ax):
+        c = np.cumsum(np.pad(x, [(r + 1, r) if i == ax else (0, 0) for i in range(x.ndim)], mode='edge'), axis=ax, dtype=np.float64)
+        n = x.shape[ax]
+        return ((np.take(c, range(2 * r + 1, 2 * r + 1 + n), axis=ax) - np.take(c, range(0, n), axis=ax)) / (2 * r + 1)).astype(np.float32)
+    def blur(x, r):  # 상자 흐림 세 번 = 가우스 흐림 근사
+        x = x.astype(np.float32); b = max(1, int(r * 0.85))
+        for _ in range(3): x = box(box(x, b, 0), b, 1)
+        return x
+    low = blur(a * m[..., None], 36) / (blur(m, 36)[..., None] + 1e-4) + 1
+    low = low * m[..., None] + a[5, 5] * (1 - m[..., None]) + (1 - m[..., None])
+    target = np.median(low[700:820, 700:860].reshape(-1, 3), axis=0)
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    k = np.full((H, W), 0.8, np.float32)
+    # 다리(몸 UV 아래쪽): 털·붉은 결 줄이기
+    legs = np.clip((yy - 1050) / 200, 0, 1) * (xx < 1320)
+    k = k * (1 - legs) + 0.45 * legs
+    k[(xx > 1300) & (yy < 1760)] = 0.62  # 얼굴·두피: 잔결이 거칠어 보이지 않게
+    def ell(cx, cy, rx, ry):
+        d = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
+        return np.clip(1.6 - d, 0, 1) ** 1.5 * (d < 1.6)
+    k = np.maximum(k * (1 - ell(1866, 1060, 40, 52)), 1.0 * ell(1866, 1060, 40, 52))  # 입술
+    for cx, cy in [(663, 620), (893, 606)]:
+        e = ell(cx, cy, 26, 26); k = k * (1 - e) + 0.4 * e  # 유두
+    e = ell(780, 990, 30, 75) * (1 - ell(780, 890, 22, 22)); k = k * (1 - e) + 0.15 * e  # 배꼽 아래 털 줄
+    k = np.asarray(Image.fromarray((k * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(8))).astype(np.float32) / 255
+    ratio = a / low
+    out = target * (1 + (ratio - 1) * k[..., None])
+    # 입술은 원래 색 비율이 커서 저주파도 살짝 붉게 남긴다
+    lip = ell(1866, 1060, 40, 52)[..., None]
+    out = out * (1 - lip * 0.5) + (a * target / np.median(low[1000:1120, 1700:1800].reshape(-1, 3), axis=0)) * lip * 0.5
+    Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), quality=88, optimize=True)
+
+def dark_iris(src, dst, size):
+    # 눈동자: 회녹색으로 비치던 홍채를 짙은 갈색으로
+    im = Image.open(P(src)).convert('RGBA').resize((size, size), Image.LANCZOS)
+    a = np.asarray(im).astype(np.float32)
+    rgb = a[..., :3]
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    f = size / 512
+    iris = np.zeros((size, size, 1), np.float32)
+    for cx, cy in [(362, 150), (150, 358)]:
+        d = np.hypot(xx - cx * f, yy - cy * f) / f
+        iris[..., 0] = np.maximum(iris[..., 0], np.clip((60 - d) / 4, 0, 1))
+    mean = (rgb * iris).reshape(-1, 3).sum(0) / iris.sum()
+    dark = rgb * (np.array([62, 38, 24], np.float32) / mean)  # 결은 남기고 짙은 갈색으로
+    sclera = np.minimum(255, rgb * 1.06 + 6)  # 흰자는 조금 더 맑게
+    a[..., :3] = dark * iris + sclera * (1 - iris)
+    Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), optimize=True)
+
+even_skin('skin_diffuse.png', 'skin.jpg')
+def soft_hair(src, dst, size):
+    # 머리카락 가장자리: 알파를 살짝 번지게 해 앞머리·옆머리 끝이 가늘게 흩어지는 반투명 띠를 만든다(그릴 때 섞어 그림)
+    from PIL import ImageFilter
+    im = Image.open(P(src)).convert('RGBA').resize((size, size), Image.LANCZOS)
+    a = np.asarray(im).astype(np.float32)
+    al = a[..., 3]
+    bl = np.asarray(Image.fromarray(al.astype(np.uint8)).filter(ImageFilter.GaussianBlur(9))).astype(np.float32)
+    # 조각 가장자리 안쪽으로 알파를 줄여(가장자리 = 메시 끝) 딱 잘린 선 대신 점점 옅어지게
+    edge = np.clip((bl / 255 - 0.5) / 0.45, 0, 1)
+    a[..., 3] = al * (0.25 + 0.75 * edge)
+    # 바깥으로 번진 곳의 색은 가까운 머리카락 색으로(검은 테 방지)
+    rgb = a[..., :3] * (al[..., None] / 255)
+    w = np.asarray(Image.fromarray(al.astype(np.uint8)).filter(ImageFilter.GaussianBlur(6))).astype(np.float32)[..., None] + 1e-3
+    blr = np.stack([np.asarray(Image.fromarray(np.clip(rgb[..., c], 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(6))).astype(np.float32) for c in range(3)], -1)
+    fill = blr / (w / 255)
+    m = (al < 140)[..., None]
+    a[..., :3] = np.where(m, fill, a[..., :3])
+    Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), optimize=True)
+soft_hair('short02_diffuse.png', 'hair.png', 1024)
 save('short02_normal.png', 'hair_n.jpg', 1024)
+for _h in HAIR_ALT:
+    im = Image.open(P(_h + '_diffuse.png')).convert('RGBA').resize((1024, 1024), Image.LANCZOS)
+    a = np.asarray(im).astype(np.float32); l = (a[..., :3] @ np.array([0.3, 0.55, 0.15], np.float32))[..., None]
+    a[..., :3] = l * np.array([1.0, 0.9, 0.82], np.float32)  # 색은 빼고 결(밝기)만: 그릴 때 머리색으로 물들인다
+    Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(os.path.join(OUT, 'hair_%s.png' % _h), optimize=True)
 save('eyebrow001.png', 'eyebrow.png', 256, True)
 save('eyelashes01.png', 'lashes.png', 256, True)
-save('brownlight_eye.png', 'eye.png', 512, True)
-save('shoes05_diffuse.png', 'shoes.jpg', 512)
+dark_iris('brownlight_eye.png', 'eye.png', 512)
+def clean_shoes(src, dst, size):
+    # 운동화: 초록 포인트(앞코 얼룩처럼 보임)는 회색으로, 양말(오른쪽 아래 조각)은 밝은 흰 양말로
+    im = Image.open(P(src)).convert('RGB').resize((size, size), Image.LANCZOS)
+    a = np.asarray(im).astype(np.float32)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    green = np.clip((g - np.maximum(r, b) - 15) / 30, 0, 1)[..., None]
+    lum = (r * 0.3 + g * 0.55 + b * 0.15)[..., None]
+    a = a * (1 - green) + np.repeat(lum * 0.8, 3, -1) * green
+    f = size / 512
+    y0, x0 = int(430 * f), int(388 * f)
+    sock = a[y0:, x0:]
+    l = sock.mean(-1, keepdims=True)
+    sock[:] = np.clip(225 + (l - l.mean()) * 1.6, 0, 255) * np.array([1.0, 0.995, 0.985])
+    Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), quality=88, optimize=True)
+clean_shoes('shoes05_diffuse.png', 'shoes.jpg', 1024)
 for f in sorted(os.listdir(OUT)): print(f, os.path.getsize(os.path.join(OUT, f)))
