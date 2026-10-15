@@ -118,6 +118,8 @@
         <p class="hint import-status" id="tryon-status"></p>
         <div id="tryon-view"></div>
         <ul id="tryon-notes" class="note-list"></ul>
+        <button type="button" class="ghost block hidden" id="size-compare-btn">사이즈 나란히 비교</button>
+        <div id="size-compare" class="size-compare hidden"></div>
       </div>
     </section>
 
@@ -161,7 +163,12 @@
       <div class="card">
         <h2>내 옷장</h2>
         <p class="hint">갖고 있는 옷을 바닥에 펼쳐 놓고 재 주세요. 재는 법은 맨 아래에 있어요. 옷 사진을 넣으면 코디 미리보기에서 그 옷 그대로 입혀 봐요(사진은 이 기기에만 저장돼요).</p>
-        <ul id="closet-list" class="list"></ul>
+        <div class="segment closet-filter" id="closet-filter" role="tablist" aria-label="옷 종류 거르기">
+          <button type="button" data-filter="all" class="active">전체</button>
+          <button type="button" data-filter="top">상의</button>
+          <button type="button" data-filter="bottom">바지</button>
+        </div>
+        <ul id="closet-list" class="list closet-grid"></ul>
         <button type="button" class="primary block" id="add-item">+ 내 옷 추가</button>
       </div>
 

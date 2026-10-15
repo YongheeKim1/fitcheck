@@ -368,6 +368,8 @@ function renderTryonPhoto() {
   $('#tryon-view').replaceChildren(c);
   const notes = res.ok ? [...res.notes, bodySourceNote(opts.category)] : res.notes;
   $('#tryon-notes').innerHTML = notes.map((n) => `<li>${esc(n)}</li>`).join('');
+  $('#size-compare-btn').classList.toggle('hidden', !res.ok || (lastResults?.results.length || 0) < 2);
+  if (!$('#size-compare').classList.contains('hidden')) renderSizeCompare(); // 비교를 펼쳐 둔 상태면 같이 갱신
   const advice = poseAdvice(check);
   if (advice) tryonStatus(esc(advice), 'warn');
   else tryonStatus(tryon.photo === tryon.refPhoto ? '저장해 둔 기준 사진으로 입혀 봤어요.' : '');
@@ -412,6 +414,56 @@ $('#tryon-photo').addEventListener('change', async (e) => {
     console.error(err);
     tryonStatus(esc(/[가-힣]/.test(err.message) ? err.message : '사진을 분석하지 못했어요. 다른 사진으로 시도해 주세요.'), 'err');
   }
+});
+
+// ---------- 사이즈 나란히 비교: 같은 내 사진에 사이즈마다 입혀 옆에 놓는다(최대 3개, 고른 사이즈를 가운데로) ----------
+function renderSizeCompare() {
+  const photo = tryon.photo;
+  if (!photo || !lastResults) return;
+  const { results, best } = lastResults;
+  const i0 = tryon.sizeIndex;
+  let idx = [i0 - 1, i0, i0 + 1].filter((i) => i >= 0 && i < results.length);
+  if (idx.length < 3 && results.length >= 3) idx = i0 === 0 ? [0, 1, 2] : [results.length - 3, results.length - 2, results.length - 1];
+  const { canvas, pose, pxPerCm, scene } = photo;
+  const check = photo.poseCheck || BodyAnalysis.checkPose(pose, canvas.width, canvas.height);
+  const sceneForDraw = scene && !aiEnabled() ? { ...scene, aiPatch: null, depthShade: null } : scene;
+  const figs = idx.map((i) => {
+    const r = results[i];
+    const c = document.createElement('canvas');
+    c.width = canvas.width; c.height = canvas.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(canvas, 0, 0);
+    const opts = garmentOpts({ lm: pose, W: c.width, H: c.height, mirror: false, pxPerCm, scene: sceneForDraw || null, poseIssues: check.issues.map((x) => x.key) });
+    opts.g = r.row;
+    if (opts.texture && scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, scene) };
+    GarmentRender.draw(ctx, opts);
+    // 나란히 놓으면 작아지므로 옷이 있는 부분만 잘라 크게(상의: 어깨 위~골반 아래, 바지: 허리 위~발끝)
+    const P = (k) => ({ x: pose[k].x * c.width, y: pose[k].y * c.height });
+    const sh = (P(11).y + P(12).y) / 2, hip = (P(23).y + P(24).y) / 2, torso = Math.max(10, hip - sh);
+    const cx = (P(11).x + P(12).x + P(23).x + P(24).x) / 4;
+    const y0 = Math.max(0, lastResults.category === 'top' ? sh - torso * 0.45 : hip - torso * 0.5);
+    const y1 = Math.min(c.height, lastResults.category === 'top' ? hip + torso * 0.7 : c.height);
+    const half = Math.min(c.width / 2, ((y1 - y0) * 0.62) / 2);
+    const x0 = Math.max(0, Math.min(c.width - 2 * half, cx - half));
+    const crop = document.createElement('canvas');
+    crop.width = Math.round(2 * half); crop.height = Math.round(y1 - y0);
+    crop.getContext('2d').drawImage(c, x0, y0, crop.width, crop.height, 0, 0, crop.width, crop.height);
+    const fig = document.createElement('figure');
+    const cap = document.createElement('figcaption');
+    // 짧은 판정: 기준 옷과 다른 곳 두 개까지(예: "허리 조금 낌 · 총장 김")
+    const off = (r.parts || []).filter((p) => p.verdict.level !== 'ok').slice(0, 2).map((p) => `${p.label} ${p.verdict.text}`);
+    cap.innerHTML = `<b class="${r === best ? 'best' : ''}">${esc(r.row.size || `#${i + 1}`)}${r === best ? ' (추천)' : ''}</b>${esc(off.join(' · ') || '기준 옷과 비슷')}`;
+    fig.append(crop, cap);
+    return fig;
+  });
+  $('#size-compare').replaceChildren(...figs);
+}
+
+$('#size-compare-btn').addEventListener('click', () => {
+  const box = $('#size-compare');
+  const open = box.classList.toggle('hidden') === false;
+  $('#size-compare-btn').textContent = open ? '사이즈 비교 닫기' : '사이즈 나란히 비교';
+  if (open) renderSizeCompare();
 });
 
 // ---------- 기준 사진: 좋은 정면 사진 한 장을 이 기기(IndexedDB)에만 저장해 두고 매번 그 사진에 입힌다 ----------

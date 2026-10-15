@@ -205,11 +205,26 @@ button.block { width: 100%; }
 .import-status.ok { color: var(--ok); }
 .import-status.err { color: var(--bad); }
 .import-status.warn { color: var(--warn); }
-.thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; flex: none; background: var(--line, #eee); }
+.thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; flex: none; background: var(--line); }
+.closet-filter { margin-bottom: 8px; }
+/* 옷장: 사진이 보이는 2열 카드 */
+.closet-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.closet-grid li { flex-direction: column; align-items: stretch; border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+.closet-grid li:last-child { border-bottom: 1px solid var(--line); }
+.closet-grid li.empty { grid-column: 1 / -1; border: none; }
+.closet-grid .thumb { width: 100%; height: auto; aspect-ratio: 1; }
+.closet-grid .actions { flex-wrap: wrap; }
+.closet-grid .actions button { flex: 1; padding: 6px 4px; font-size: 12px; }
 .thumb.big { width: 96px; height: 96px; display: block; margin-bottom: 6px; }
 .list li .grow { flex: 1; min-width: 0; }
 .item-photo { margin: 8px 0; }
 .outfit-save { align-items: end; margin-top: 10px; }
+.size-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+.size-compare figure { margin: 0; min-width: 0; }
+.size-compare canvas { width: 100%; height: auto; border-radius: 10px; display: block; }
+.size-compare figcaption { font-size: 13px; text-align: center; margin-top: 4px; }
+.size-compare figcaption b { display: block; font-size: 15px; }
+.size-compare .best { color: var(--ok); }
 #outfit-view canvas { width: 100%; height: auto; border-radius: 12px; margin-top: 8px; display: block; }
 .ref-photo { margin-top: 8px; }
 .progress { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 8px; }

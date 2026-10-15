@@ -152,13 +152,21 @@ $('#body-form').addEventListener('submit', (e) => {
 });
 
 // ---------- 내 옷 ----------
+let closetFilter = 'all';
 function renderCloset() {
   const list = $('#closet-list');
   if (!state.closet.length) {
     list.innerHTML = '<li class="empty">아직 등록한 옷이 없어요. 제일 잘 맞는 바지나 상의부터 넣어 보세요.</li>';
+    if (typeof onClosetRendered === 'function') onClosetRendered();
     return;
   }
-  list.innerHTML = state.closet.map((p) => {
+  const shown = state.closet.filter((p) => closetFilter === 'all' || p.category === closetFilter);
+  if (!shown.length) {
+    list.innerHTML = `<li class="empty">${CATEGORY_LABEL[closetFilter]}가 아직 없어요.</li>`;
+    if (typeof onClosetRendered === 'function') onClosetRendered();
+    return;
+  }
+  list.innerHTML = shown.map((p) => {
     const m = partsOf(p.category).filter((pt) => p[pt.key] != null).map((pt) => `${pt.label} ${fmt(p[pt.key])}`).join(' · ');
     return `
       <li>
@@ -169,6 +177,7 @@ function renderCloset() {
           <div class="meta">${m || '실측 없음'}</div>
         </div>
         <div class="actions">
+          <button type="button" data-wear="${p.id}">코디에 넣기</button>
           <button type="button" data-edit="${p.id}">수정</button>
           <button type="button" data-del="${p.id}">삭제</button>
         </div>
@@ -177,7 +186,17 @@ function renderCloset() {
   if (typeof onClosetRendered === 'function') onClosetRendered(); // wardrobe.js: 사진·코디 고르기 갱신
 }
 
+$('#closet-filter').addEventListener('click', (e) => {
+  const f = e.target.dataset.filter;
+  if (!f) return;
+  closetFilter = f;
+  $('#closet-filter').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.filter === f));
+  renderCloset();
+});
+
 $('#closet-list').addEventListener('click', (e) => {
+  const wearId = e.target.dataset.wear;
+  if (wearId && typeof wearInOutfit === 'function') { wearInOutfit(wearId); return; } // wardrobe.js
   const editId = e.target.dataset.edit;
   const delId = e.target.dataset.del;
   if (editId) openItemForm(state.closet.find((p) => p.id === editId));

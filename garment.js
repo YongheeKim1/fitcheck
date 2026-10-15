@@ -1037,18 +1037,50 @@
       ax0 = Math.max(0, Math.floor(ax0)); ay0 = Math.max(0, Math.floor(ay0)); ax1 = Math.min(W - 1, Math.ceil(ax1)); ay1 = Math.min(H - 1, Math.ceil(ay1));
       const img = ctx.getImageData(0, 0, W, H);
       const d = img.data;
+      // 실제로 보이는 팔(분할에서 피부)의 중심선과 굵기를 팔마다 잰다: 관절 좌표로 잡은 선은 실제 팔보다
+      // 바깥으로 치우칠 때가 있어, 원래 소매 자리에 칠한 피부가 팔에서 떠 보인다 → 실제 팔 선을 위로 이어 그린다
+      const sides = [0, 1].map((side) => {
+        const segs = geo.armSkin.slice(side * 2, side * 2 + 2);
+        const rows = [];
+        for (let y = ay0; y <= ay1; y += 2) {
+          let l = Infinity, r = -Infinity;
+          for (let x = ax0; x <= ax1; x++) {
+            if (catAt(x, y) !== 2 || gA[(y * W + x) * 4 + 3] > 25) continue;
+            if (!segs.some((sg) => segD(x, y, sg.a, sg.b)[0] <= sg.R)) continue;
+            if (x < l) l = x;
+            if (x > r) r = x;
+          }
+          if (r - l > 3) rows.push([y, (l + r) / 2, r - l]);
+        }
+        if (rows.length < 12) return null;
+        // 중심선 x = a + b·y (최소제곱), 굵기는 중앙값
+        let sy = 0, sx = 0, syy = 0, sxy = 0;
+        for (const [y, cx] of rows) { sy += y; sx += cx; syy += y * y; sxy += y * cx; }
+        const n = rows.length, den = n * syy - sy * sy;
+        const b = den ? (n * sxy - sy * sx) / den : 0, a = (sx - b * sy) / n;
+        const widths = rows.map((r) => r[2]).sort((p, q) => p - q);
+        return { a, b, hw: (widths[widths.length >> 1] / 2) * 1.08 };
+      });
       const pix = [];
       let lum = 0;
       for (let y = ay0; y <= ay1; y++) for (let x = ax0; x <= ax1; x++) {
         const i = y * W + x;
         if (gA[i * 4 + 3] > 25 || catAt(x, y) !== 4) continue; // 새 옷 밑이거나 원래 옷이 아니면 그대로
-        let best = Infinity, ring = false;
-        for (const sg of geo.armSkin) {
+        let best = Infinity, ring = false, near = 0, nearD = Infinity, above = false;
+        geo.armSkin.forEach((sg, k) => {
           const [dist, t] = segD(x, y, sg.a, sg.b);
           const r = sg.ra + (sg.rb - sg.ra) * t;
           if (dist / r < best) best = dist / r;
           if (dist <= sg.R) ring = true;
-        }
+          if (dist < nearD) {
+            nearD = dist; near = k >> 1;
+            // 위팔 시작점보다 위(어깨·목 옆)는 팔이 아니다: 피부를 칠하지 않는다
+            above = k % 2 === 0 && ((x - sg.a.x) * (sg.b.x - sg.a.x) + (y - sg.a.y) * (sg.b.y - sg.a.y)) < 0;
+          }
+        });
+        if (above) continue;
+        const fit = sides[near];
+        if (fit && ring) best = Math.abs(x - (fit.a + fit.b * y)) / fit.hw; // 실제 팔 선 기준
         if (best > 1) {
           // 팔 밖에 남은 원래 소매(헐렁한 소매 등): 배경으로 메운다
           if (ring) { (armHole || (armHole = new Uint8Array(W * H)))[i] = 1; }
@@ -1059,7 +1091,20 @@
       }
       if (pix.length > 40) {
         lum /= pix.length / 2;
-        const [r, g2, b] = skinC;
+        // 색: 이 사진에서 실제로 보이는 팔 피부(팔 둘레 안, 분할에서 피부) 중앙값. 없으면 손 색
+        const armPx = [[], [], []];
+        for (let y = ay0; y <= ay1; y += 2) for (let x = ax0; x <= ax1; x += 2) {
+          if (catAt(x, y) !== 2) continue;
+          let inArm = false;
+          for (const sg of geo.armSkin) { const [dist] = segD(x, y, sg.a, sg.b); if (dist <= sg.ra) { inArm = true; break; } }
+          if (!inArm) continue;
+          const i = (y * W + x) * 4;
+          if (!(d[i] > 60 && d[i] > d[i + 2])) continue;
+          armPx[0].push(d[i]); armPx[1].push(d[i + 1]); armPx[2].push(d[i + 2]);
+        }
+        const med = (v) => { v.sort((a, b) => a - b); return v[v.length >> 1]; };
+        // 원통 명암의 평균(약 0.95)만큼 밝게 맞춰, 칠한 팔의 평균 밝기가 실제 팔과 같아지게
+        const [r, g2, b] = armPx[0].length > 60 ? armPx.map((v) => med(v) / 0.95) : skinC;
         for (let k = 0; k < pix.length; k += 2) {
           const i = pix[k], t = pix[k + 1];
           const cyl = 0.62 + 0.45 * Math.sqrt(Math.max(0, 1 - t * t));                      // 원통 명암(가장자리로 갈수록 어둡게)

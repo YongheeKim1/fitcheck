@@ -29,8 +29,13 @@ async function fillThumb(img, id) {
     wardrobe.thumbs.set(id, blob ? URL.createObjectURL(blob) : null);
   }
   const url = wardrobe.thumbs.get(id);
-  if (url) { img.src = url; img.classList.remove('hidden'); } else img.classList.add('hidden');
+  if (url) { img.src = url; img.classList.remove('hidden'); return; }
+  // 옷장 격자에서는 사진이 없어도 자리를 채운다(카드 높이가 들쭉날쭉하지 않게)
+  if (img.closest('.closet-grid')) { img.src = NO_PHOTO; img.classList.remove('hidden'); } else img.classList.add('hidden');
 }
+const NO_PHOTO = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#8884"/>'
+  + '<text x="50" y="54" font-size="11" text-anchor="middle" fill="#888" font-family="sans-serif">사진 없음</text></svg>');
 
 function onClosetRendered() {
   document.querySelectorAll('#closet-list img[data-thumb]').forEach((img) => fillThumb(img, img.dataset.thumb));
@@ -299,4 +304,13 @@ $('#outfit-saved').addEventListener('click', (e) => {
 });
 
 $('#outfit-run').addEventListener('click', runOutfit);
+
+// 옷장 카드의 "코디에 넣기": 그 옷을 상의/하의 칸에 넣고 바로 입혀 본다
+function wearInOutfit(id) {
+  const p = state.closet.find((x) => x.id === id);
+  if (!p) return;
+  $(p.category === 'top' ? '#outfit-top' : '#outfit-bottom').value = id;
+  $('#outfit').scrollIntoView({ behavior: 'smooth' });
+  runOutfit();
+}
 onClosetRendered(); // app.js가 먼저 목록을 그렸으므로 사진·고르기 칸을 채운다
