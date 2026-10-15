@@ -1053,12 +1053,23 @@
       let any = false;
       for (let x = 0; x < W; x++) {
         if (gTop[x] < 0) continue;
-        let started = false; // 이 열에서 원래 바지가 처음 나온 뒤로는 옷 픽셀을 모두 칠한다(박음질·밝은 점이 남지 않게)
+        let started = -1; // 이 열에서 원래 바지가 처음 나온 줄. 그 뒤로는 옷 픽셀을 모두 칠한다(박음질·밝은 점이 남지 않게)
         for (let y = Math.max(0, y1); y < gTop[x]; y++) {
-          if (!started && aboveWaist(x, y)) started = true;
-          if (!started || catAt(x, y) !== 4) continue;
-          const i2 = (y * W + x) * 4, c = prof[x];
-          d[i2] = c[0]; d[i2 + 1] = c[1]; d[i2 + 2] = c[2];
+          if (started < 0 && aboveWaist(x, y)) started = y;
+          if (started < 0 || catAt(x, y) !== 4) continue;
+          // 평평한 색 대신 바로 위 상의 천을 거울처럼 이어 붙인다(주름·결이 이어지게). 상의가 아닌 픽셀이면 평균색
+          // 상의 밑단 단(그늘진 접힌 부분)은 건너뛰고 3cm 위의 깨끗한 천부터. 분할에서 옷인 픽셀만(벽색이 비슷해도 제외)
+          const k = y - started;
+          const skip = Math.round((geo.s || W / 100) * 3);
+          const ys = Math.max(0, started - skip - (k % span));
+          const j = (ys * W + x) * 4, pc = prof[x];
+          const okSrc = catAt(x, ys) === 4 && dist(x, ys, topC) < 60 && bA[j + 3] > 100;
+          // 평균색과 반씩 섞는다(결은 살리되 줄무늬처럼 튀지 않게)
+          const c = okSrc ? [(src[j] + pc[0]) / 2, (src[j + 1] + pc[1]) / 2, (src[j + 2] + pc[2]) / 2] : pc;
+          // 바지 허리 쪽으로 갈수록 살짝 어둡게(상의가 덮여 생기는 그늘)
+          const f = 1 - 0.16 * (k / Math.max(1, gTop[x] - started));
+          const i2 = (y * W + x) * 4;
+          d[i2] = c[0] * f; d[i2 + 1] = c[1] * f; d[i2 + 2] = c[2] * f;
           any = true;
         }
       }
@@ -1695,7 +1706,8 @@
         const Lc = Math.max(L * 0.3, L - (toWrist - arcTo(tubePath, wrist)));
         const { pts } = walk(tubePath, Lc, 16);
         const startW = Math.max(len(sub(sp, ap)), 11 * s);
-        const endW = g.sleeve > 40 ? Math.max(startW * 0.55, 8 * s) : startW * 0.9;
+        // 소매 끝은 겨드랑이보다 좁다(반팔도 끝으로 갈수록 좁아져야 상자처럼 안 보인다)
+        const endW = g.sleeve > 40 ? Math.max(startW * 0.55, 8 * s) : Math.max(startW * 0.72, 10 * s);
         const outer = [], inner = [];
         pts.forEach(({ p, dir, d }) => {
           let nl = V(-dir.y, dir.x);
