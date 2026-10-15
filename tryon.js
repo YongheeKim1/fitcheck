@@ -711,27 +711,38 @@ function liveLoop() {
     const res = l.landmarker.detectForVideo(video, now);
     updateLiveSeg(l, video, now);
     updateLiveLight(l, canvas, now);
-    const lm = res.landmarks?.[0];
+    let lm = res.landmarks?.[0];
+    // 어깨가 골반보다 아래로 잡히면 몸을 거꾸로 잘못 인식한 것(얼굴이 가려졌을 때 등): 그 프레임은 건너뛴다
+    if (lm && lm[11].y > lm[23].y && lm[12].y > lm[24].y) lm = null;
     if (!lm) {
       l.smooth = null;
-      liveHint('몸이 보이게 카메라에서 조금 떨어져 주세요.');
+      liveHint('몸이 보이게 카메라에서 조금 떨어져 주세요. 얼굴이 가려지지 않게 해 주세요.');
     } else {
       l.smooth = smoothLandmarks(l.smooth, lm);
-      const need = lastResults.category === 'top' ? [11, 12, 23, 24] : [23, 24, 25, 26, 27, 28];
+      const cats = l.outfit ? l.outfit.map((o) => o.category) : [lastResults.category];
+      const need = [...new Set(cats.flatMap((c) => (c === 'top' ? [11, 12, 23, 24] : [23, 24, 25, 26, 27, 28])))];
       if (need.some((i) => (lm[i].visibility ?? 1) < 0.5)) {
-        liveHint(lastResults.category === 'top' ? '어깨부터 골반까지 보이게 해 주세요.' : '골반부터 발끝까지 보이게 해 주세요.');
+        liveHint(cats.includes('bottom') ? (cats.includes('top') ? '머리부터 발끝까지 보이게 해 주세요.' : '골반부터 발끝까지 보이게 해 주세요.') : '어깨부터 골반까지 보이게 해 주세요.');
       } else {
         // 어깨 관절 간격(px) ÷ 내 어깨 관절 간격(cm) = 1cm당 px. 거리가 바뀌어도 크기가 맞는다
         const sw = Math.hypot((l.smooth[11].x - l.smooth[12].x) * W, (l.smooth[11].y - l.smooth[12].y) * H);
         const scale = sw / shoulderJointCm();
         l.scale = l.scale ? l.scale + (scale - l.scale) * 0.2 : scale;
         const check = BodyAnalysis.checkPose(l.smooth, W, H);
-        const opts = garmentOpts({ lm: l.smooth, W, H, mirror, pxPerCm: l.scale, live: true, tps: false, poseIssues: check.issues.map((i) => i.key) });
-        if (opts.texture && l.scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, l.scene) };
-        const r = GarmentRender.draw(ctx, opts);
-        if (r.ok && r.geo && l.skinMask) liveFront(ctx, video, r.geo, l, W, H, mirror);
+        const base = { lm: l.smooth, W, H, mirror, pxPerCm: l.scale, live: true, tps: false, poseIssues: check.issues.map((i) => i.key) };
+        // 옷장 코디면 여러 벌을 정한 순서대로(꺼내 입기: 바지 → 상의), 아니면 사이즈표 한 벌
+        const specs = l.outfit ? l.outfit.map((o) => ({ ...o.opts, body: bodyForRender(), ...base })) : [garmentOpts(base)];
+        let r = null, front = null;
+        const notes = [];
+        for (const opts of specs) {
+          if (opts.texture && l.scene) opts.texture = { ...opts.texture, texture: harmonizedTexture(opts.texture, l.scene) };
+          r = GarmentRender.draw(ctx, opts);
+          if (r.ok && r.geo) front = opts.category === 'top' || !front ? r.geo : front; // 손 둘레·소매는 상의 기준
+          notes.push(...(r.notes || []).slice(0, 1));
+        }
+        if (front && l.skinMask) liveFront(ctx, video, front, l, W, H, mirror);
         // 자세 문제가 있으면 그것부터 알려 준다(팔을 내리면 더 정확해요 등)
-        liveHint(check.ok ? r.notes.slice(0, 2).join(' ') : `${check.issues[0].text}. 팔을 내리고 정면으로 서면 더 정확해요.`);
+        liveHint(check.ok ? notes.slice(0, 2).join(' ') : `${check.issues[0].text}. 팔을 내리고 정면으로 서면 더 정확해요.`);
       }
     }
   }
@@ -789,7 +800,9 @@ async function liveShot() {
   if (l.facing === 'user') { g.translate(c.width, 0); g.scale(-1, 1); }
   g.drawImage(video, 0, 0);
   const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.95));
+  const outfitMode = !!l.outfit;
   closeLive();
+  if (outfitMode && typeof outfitShot === 'function') { outfitShot(blob); return; } // wardrobe.js
   try {
     tryon.photo = await analyzeTryonPhoto(blob);
     tryon.photoUploaded = true;
@@ -801,16 +814,21 @@ async function liveShot() {
   }
 }
 
-async function openLive() {
-  if (!lastResults) return;
+// outfit: 옷장 코디 [{ category, opts }](wardrobe.js가 만든다). 없으면 핏 비교의 사이즈표 한 벌
+async function openLive(outfit = null) {
+  const report = (text) => (outfit && typeof outfitStatus === 'function' ? outfitStatus(text, 'err') : tryonStatus(text, 'err'));
+  if (!outfit && !lastResults) return;
   if (!navigator.mediaDevices?.getUserMedia) {
-    tryonStatus('이 브라우저에서는 카메라를 쓸 수 없어요. https 주소로 열었는지 확인해 주세요.', 'err');
+    report('이 브라우저에서는 카메라를 쓸 수 없어요. https 주소로 열었는지 확인해 주세요.');
     return;
   }
   $('#live').classList.remove('hidden');
   document.body.classList.add('no-scroll');
+  // 옷장 코디에서는 사이즈·색 고르기가 필요 없다
+  $('#live-size').classList.toggle('hidden', !!outfit);
+  $('#live-color').classList.toggle('hidden', !!outfit);
   $('#live-hint').textContent = tryon.liveModel ? '카메라 켜는 중…' : '자세 인식 모델 불러오는 중… (처음 한 번만)';
-  tryon.live = { facing: 'user', lastHint: 0, lastHintText: '' };
+  tryon.live = { facing: 'user', lastHint: 0, lastHintText: '', outfit };
   try {
     tryon.live.landmarker = await getLiveModel();
     // 분할 모델은 없어도 카메라는 돈다(손을 옷 위로 올리는 것만 빠진다)
@@ -821,9 +839,9 @@ async function openLive() {
   } catch (err) {
     console.error(err);
     closeLive();
-    tryonStatus(err.name === 'NotAllowedError'
+    report(err.name === 'NotAllowedError'
       ? '카메라 권한이 거부됐어요. 브라우저 설정에서 카메라를 허용해 주세요.'
-      : '카메라를 켜지 못했어요.', 'err');
+      : '카메라를 켜지 못했어요.');
   }
 }
 
@@ -834,7 +852,7 @@ function closeLive() {
   document.body.classList.remove('no-scroll');
 }
 
-$('#open-live').addEventListener('click', openLive);
+$('#open-live').addEventListener('click', () => openLive());
 $('#live-close').addEventListener('click', closeLive);
 $('#live-shot').addEventListener('click', liveShot);
 $('#live-flip').addEventListener('click', async () => {

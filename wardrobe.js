@@ -305,6 +305,61 @@ $('#outfit-saved').addEventListener('click', (e) => {
 
 $('#outfit-run').addEventListener('click', runOutfit);
 
+// ---------- 카메라로 입어 보기: 고른 상의·하의를 실시간으로 함께 입힌다 ----------
+async function outfitSpecs() {
+  const top = state.closet.find((p) => p.id === $('#outfit-top').value) || null;
+  const bottom = state.closet.find((p) => p.id === $('#outfit-bottom').value) || null;
+  const order = $('#outfit-tuck').value === 'in' ? [top, bottom] : [bottom, top];
+  const specs = [];
+  for (const p of order) {
+    if (!p) continue;
+    const cut = await garmentCut(p);
+    specs.push({
+      category: p.category,
+      opts: {
+        category: p.category,
+        g: itemRow(p),
+        color: cut?.avgColor || DEFAULT_COLOR[p.category],
+        stretch: p.stretch,
+        texture: cut && cut.category === p.category ? cut : null,
+      },
+    });
+  }
+  return specs;
+}
+
+$('#outfit-live').addEventListener('click', async () => {
+  const btn = $('#outfit-live');
+  btn.disabled = true;
+  try {
+    outfitStatus('옷 사진 준비 중…');
+    await loadMediaPipe();
+    const specs = await outfitSpecs();
+    if (!specs.length) { outfitStatus('입어 볼 상의나 하의를 골라 주세요.', 'err'); return; }
+    outfitStatus('');
+    openLive(specs);
+  } catch (err) {
+    console.error(err);
+    outfitStatus('카메라를 준비하지 못했어요.', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// 카메라에서 "찍기": 찍은 장면을 모델 사진으로 삼아 정밀하게 다시 그린다
+async function outfitShot(blob) {
+  try {
+    outfitStatus('찍은 사진 분석 중…');
+    wardrobe.model = await analyzeTryonPhoto(blob);
+    wardrobe.patches.clear();
+    await runOutfit();
+    $('#outfit').scrollIntoView({ behavior: 'smooth' });
+  } catch (err) {
+    console.error(err);
+    outfitStatus('찍은 사진을 분석하지 못했어요. 다시 찍어 주세요.', 'err');
+  }
+}
+
 // 옷장 카드의 "코디에 넣기": 그 옷을 상의/하의 칸에 넣고 바로 입혀 본다
 function wearInOutfit(id) {
   const p = state.closet.find((x) => x.id === id);

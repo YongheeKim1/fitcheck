@@ -720,6 +720,8 @@
       props.push({ a: P(wr), b: P(fi), r: 10 * s }); // 손에 든 물건(휴대폰 등)
     }
     segs.push({ a: M, b: sub(M, mul(u, 12 * s)), r: 6 * s }); // 목
+    // 어깨 윗부분(승모근): 어깨 관절에서 목 아래까지. 빠지면 그 자리의 원래 옷을 "몸 밖"으로 보고 배경으로 지운다
+    for (const sh of [shA, shB]) segs.push({ a: sh, b: sub(M, mul(u, 5 * s)), r: 6.5 * s });
     return { torsoPoly, segs, hands, props, arms, s };
   }
 
