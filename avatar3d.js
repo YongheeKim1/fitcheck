@@ -284,7 +284,13 @@ const Avatar3D = (() => {
     }
     return P;
   }
-  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02' };
+  const FACE = {
+    'lowerlip-vol': -0.7, 'lowerlip-h': -0.3, 'mouth-angle': 0.3, 'mouth-w': -0.1,
+    'chin-prom': 0.25, 'chin-w': -0.45, 'head-fat': -0.5, 'head-oval': 0,
+    'cheek-vol': -0.25, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
+    'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.15, 'eye-bag': -0.4, 'eye-scale': 0.05,
+  };
+  const POSE = { arm: 4.5, fore: 1.5, leg: 2.5, twist: -25, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.8 };
   const HAND_CURL = { palmSign: -1, seg: [10, 25, 12], more: 2, close: 3, thumb: [0, 10, 10], thumbIn: -60 };
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
@@ -349,6 +355,44 @@ const Avatar3D = (() => {
     return env;
   }
 
+  // 오목함(0~1): 이웃 평균을 여러 번 해 큰 굴곡(눈두덩)까지 잡는다
+  let adj = null;
+  function cavity(P, N) {
+    const n = P.length / 3, t = data.normTris;
+    if (!adj) {
+      const sets = Array.from({ length: n }, () => new Set());
+      for (let k = 0; k < t.length; k += 3) for (let e = 0; e < 3; e++) { const a = t[k + e], b = t[k + (e + 1) % 3]; sets[a].add(b); sets[b].add(a); }
+      const off = new Uint32Array(n + 1); sets.forEach((st, i) => { off[i + 1] = off[i] + st.size; });
+      const idx = new Uint32Array(off[n]); sets.forEach((st, i) => { let j = off[i]; for (const v of st) idx[j++] = v; });
+      adj = { off, idx };
+    }
+    const { off, idx } = adj;
+    let S = new Float32Array(P), T2 = new Float32Array(P.length);
+    const out = new Float32Array(n);
+    for (let it = 1; it <= 12; it++) {
+      for (let i = 0; i < n; i++) {
+        const a = off[i], b = off[i + 1];
+        if (a === b) { T2[i * 3] = S[i * 3]; T2[i * 3 + 1] = S[i * 3 + 1]; T2[i * 3 + 2] = S[i * 3 + 2]; continue; }
+        let x = 0, y = 0, z = 0;
+        for (let j = a; j < b; j++) { const v = idx[j] * 3; x += S[v]; y += S[v + 1]; z += S[v + 2]; }
+        const m = b - a;
+        T2[i * 3] = (S[i * 3] + x / m) / 2; T2[i * 3 + 1] = (S[i * 3 + 1] + y / m) / 2; T2[i * 3 + 2] = (S[i * 3 + 2] + z / m) / 2;
+      }
+      [S, T2] = [T2, S];
+      if (it === 3 || it === 12) {
+        const sc = it === 3 ? 0.18 : 0.7; // 작은 굴곡 / 큰 굴곡 기준 깊이(cm)
+        const hw = data.w.head;
+        for (let i = 0; i < n; i++) {
+          const d = (S[i * 3] - P[i * 3]) * N[i * 3] + (S[i * 3 + 1] - P[i * 3 + 1]) * N[i * 3 + 1] + (S[i * 3 + 2] - P[i * 3 + 2]) * N[i * 3 + 2];
+          // 큰 굴곡은 얼굴(눈두덩·콧방울·입꼬리)에만 진하게: 몸통에 쓰면 가슴·쇄골에 멍처럼 얼룩진다
+          const wgt = it === 3 ? 0.45 : 0.03 + 0.47 * (hw[i] / 255);
+          out[i] += Math.max(0, Math.min(1, d / sc)) * wgt;
+        }
+      }
+    }
+    return out;
+  }
+
   // 머리카락 그늘: 머리 피부 정점마다 가장 가까운 머리카락 정점까지 거리(cm) → 가까울수록 1
   function hairShade(H, P) {
     const C = 2, cells = new Map(), key = (x, y, z) => x + ',' + y + ',' + z;
@@ -381,7 +425,10 @@ const Avatar3D = (() => {
     await load();
     const m = Avatar.measures(state, analysis);
     const { w } = fit(m);
-    let P = morph(w);
+    // 얼굴 다듬기(몸 치수와 무관): 아랫입술을 얇게, 입꼬리 살짝 위로, 갸름한 턱, 콧볼 좁게, 목 조금 굵게 등
+    const fw = {};
+    for (const [k, v] of Object.entries(FACE)) fw['f.' + k] = v;
+    let P = morph({ ...w, ...fw });
     const meas = measure(P, m.H);
     const k = meas.k * 1; // dm → cm(목표 키)
     // 단위 맞추기: cm, 바닥 y=0, 가운데 x=0
@@ -427,17 +474,24 @@ const Avatar3D = (() => {
     const rest = new Float32Array(data.body.ref.length * 3);
     for (let i = 0; i < data.body.ref.length; i++) for (let q = 0; q < 3; q++) rest[i * 3 + q] = cmP[data.body.ref[i] * 3 + q];
     body.geometry.setAttribute('restPos', new THREE.BufferAttribute(rest, 3));
+    // 오목한 곳 그늘(눈두덩·콧방울 아래·입꼬리·턱 밑·겨드랑이·배꼽·손가락 사이): 이웃 평균으로 부드럽게 한 면이 법선 쪽으로 얼마나 떠 있나
+    {
+      const cav = cavity(P, N), ref = data.body.ref, a = new Float32Array(ref.length);
+      for (let i = 0; i < ref.length; i++) a[i] = cav[ref[i]];
+      body.geometry.setAttribute('cav', new THREE.BufferAttribute(a, 1));
+    }
     const hipY = jpos(cmP, 'upperleg01.L____head')[1];
     let crotchY = -Infinity;
     for (const i of data.meta.crotch) if (Math.abs(cmP[i * 3]) < 1) crotchY = Math.max(crotchY, cmP[i * 3 + 1]);
-    const briefU = { uTop: { value: hipY + 7.5 }, uBot: { value: crotchY - 7 }, uHalf: { value: GarmentRender.visW(m.hip, 'hip') / 2 + 4 } };
+    const briefU = { uTop: { value: hipY + 7.5 }, uBot: { value: crotchY - 7 }, uHalf: { value: GarmentRender.visW(m.hip, 'hip') / 2 + 4 }, uCav: { value: POSE.cav } };
     skinMat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, briefU);
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nvarying vec3 vRest;\nvarying float vHairOcc;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nuniform float uTop, uBot, uHalf;\nfloat briefM;')
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nattribute float cav;\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;\nvCav = cav;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nuniform float uTop, uBot, uHalf, uCav;\nfloat briefM;')
         .replace('#include <map_fragment>', `#include <map_fragment>
-          diffuseColor.rgb *= 1.0 - 0.4 * vHairOcc; // 앞머리·옆머리 바로 아래 피부 그늘
+          diffuseColor.rgb *= (1.0 - 0.4 * vHairOcc) * (1.0 - uCav * vCav) ; // 앞머리 아래 그늘 · 오목한 곳 그늘(따뜻한 쪽으로)
+          diffuseColor.r += uCav * vCav * 0.04;
           {
             float e = max(fwidth(vRest.y), 0.05);
             float ax = abs(vRest.x);
@@ -460,14 +514,39 @@ const Avatar3D = (() => {
     for (const p of data.proxies) {
       if (p.kind === 'hair' && p.name !== hairName) continue;
       const PP = proxyPos(p, P, p.kind === 'hair' ? POSE.hairThick : 1); // 머리카락은 두피에 더 붙여 헬멧처럼 부풀지 않게
-      const g = geom(p.ref, p.uv, p.tris, PP, null);
+      if (p.kind === 'brow' && POSE.browThick !== 1) {
+        // 눈썹 메시가 얇아 가는 선처럼 보인다: 좌우 눈썹 각각 가운데 높이를 기준으로 위아래로 늘린다(아치 모양은 거의 그대로)
+        for (const sd of [1, -1]) {
+          const ids = [];
+          for (let i = 0; i < PP.length; i += 3) if (PP[i] * sd > 0) ids.push(i);
+          // x 위치별 가운데 높이(아치)를 따라 늘려야 아치가 과장되지 않는다: x를 8칸으로 나눠 칸마다 평균 y
+          let x0 = Infinity, x1 = -Infinity;
+          for (const i of ids) { x0 = Math.min(x0, PP[i]); x1 = Math.max(x1, PP[i]); }
+          const B = 8, sum = new Float64Array(B), cnt = new Float64Array(B);
+          const bin = (x) => Math.min(B - 1, Math.floor(((x - x0) / Math.max(1e-6, x1 - x0)) * B));
+          for (const i of ids) { const b = bin(PP[i]); sum[b] += PP[i + 1]; cnt[b]++; }
+          for (const i of ids) { const b = bin(PP[i]); const cy = sum[b] / Math.max(1, cnt[b]); PP[i + 1] = cy + (PP[i + 1] - cy) * POSE.browThick; }
+        }
+      }
+      let tris = p.tris;
+      if (p.kind === 'lash') {
+        // 아래 속눈썹은 빼기: 낮은 눈꺼풀 아래로 흰자 사이에 가시처럼 늘어져 보인다
+        const eyeY = (jpos(P, 'eye.L____head')[1] + jpos(P, 'eye.R____head')[1]) / 2;
+        const keep = [];
+        for (let i = 0; i < tris.length; i += 3) {
+          const y = (PP[p.ref[tris[i]] * 3 + 1] + PP[p.ref[tris[i + 1]] * 3 + 1] + PP[p.ref[tris[i + 2]] * 3 + 1]) / 3;
+          if (y > eyeY) keep.push(tris[i], tris[i + 1], tris[i + 2]);
+        }
+        tris = new Uint32Array(keep);
+      }
+      const g = geom(p.ref, p.uv, tris, PP, null);
       if (p.kind === 'hair') body.geometry.setAttribute('hairOcc', new THREE.BufferAttribute(hairShade(PP, P), 1));
       let mat;
       if (p.kind === 'hair') {
         const ht = hairRGB.map((v, i) => Math.max(0.05, Math.min(2.5, v / Math.max(8, data.hairAvg[p.name][i]))));
         mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], ...(p.name === 'short02' ? { normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(0.45, 0.45) } : {}), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, specularIntensity: 0.35, sheen: 0.35, sheenRoughness: 0.4, sheenColor: new THREE.Color(0.4, 0.32, 0.26), alphaTest: 0.55, side: THREE.DoubleSide });
       } else if (p.kind === 'brow' || p.kind === 'lash') {
-        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(hairRGB[0] / 255 * 0.5, hairRGB[1] / 255 * 0.5, hairRGB[2] / 255 * 0.5) : new THREE.Color(0.06, 0.05, 0.045), roughness: 0.8, transparent: true, opacity: 1, alphaTest: 0.05, depthWrite: false, side: THREE.DoubleSide });
+        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(Math.min(1, hairRGB[0] / 255 * 1.5), Math.min(1, hairRGB[1] / 255 * 1.5), Math.min(1, hairRGB[2] / 255 * 1.5)).convertSRGBToLinear() : new THREE.Color(0.06, 0.05, 0.045), roughness: 0.8, ...(p.kind === 'lash' && POSE.lashOpaque ? { alphaTest: 0.4 } : { transparent: true, opacity: 1, alphaTest: 0.05, depthWrite: false }), side: THREE.DoubleSide });
       } else if (p.kind === 'eye') {
         mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 3, transparent: true, alphaTest: 0.02 }); // 소프트박스가 눈에 비친 반짝임
       } else {
@@ -478,6 +557,7 @@ const Avatar3D = (() => {
       mesh.receiveShadow = true;
       mesh.userData.kind = p.kind;
       mesh.renderOrder = p.kind === 'brow' || p.kind === 'lash' ? 2 : 1;
+      if (POSE.hide?.includes(p.kind)) mesh.visible = false; // 개발용
       scene.add(mesh);
       if (p.kind !== 'shoes') headParts.push(mesh);
       if (p.kind === 'hair') {
@@ -723,7 +803,7 @@ const Avatar3D = (() => {
     return { canvas, pose: lm, pxPerCm: s, scene: sceneOut, poseCheck: { ok: true, issues: [] }, isAvatar: true, is3D: true, measures: m, fitted: meas, hasFace: !!face?.img };
   }
 
-  return { load, build, fit, measure, morph, HAND_CURL, POSE };
+  return { load, build, fit, measure, morph, HAND_CURL, POSE, FACE };
 })();
 
 // 내 체형 탭의 아바타 카드를 3D로 바꿔 그리기(첫 화면을 막지 않게 한가할 때)

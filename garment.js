@@ -1465,6 +1465,7 @@
       sub(Hl, mul(n, hW / 2)), sub(T, mul(n, wW / 2)),
     ];
     const tex = o.texture && o.texture.category === 'bottom' ? o.texture : null;
+    let wlL = sub(T, mul(n, wW / 2)), wlR = add(T, mul(n, wW / 2)); // 실제로 그린 바지 윗선 양 끝(아바타 허리 곡선용)
     let D0 = 0; // 바지를 실제로 그리기 시작하는 깊이(허리 위 T에서). 상품 사진에서 허리가 가려졌으면 0보다 크다
     if (tex) {
       // 허리 띠: 허리 밴드 위(T) → 엉덩이(Hl) → 가랑이(C) 7칸 + 다리 두 개(garmentsource.js의 원본 띠와 같은 구성)
@@ -1483,6 +1484,7 @@
         const visCm = (w6[0].y - w0[0].y) / srcPerCm;
         if (visCm < g.rise * 0.8) D0 = Math.max(0, dC - Math.min(dC, visCm * 1.1 * s));
       }
+      wlL = atDepth(sidePoly(neg, -1), T, u, D0); wlR = atDepth(sidePoly(pos, 1), T, u, D0);
       for (let k = 0; k <= rows; k++) {
         const D = D0 + (dC - D0) * (k / 6);
         dst.push([atDepth(sidePoly(neg, -1), T, u, D), atDepth(sidePoly(pos, 1), T, u, D)]);
@@ -1581,7 +1583,7 @@
     // 밑단 아래 원래 바지를 지울 수 있는 가장 낮은 줄: 발목과 발꿈치 사이(그 아래는 신발)
     const ankY = Math.max(P(27).y, P(28).y);
     const ankleMax = ankY + 0.85 * Math.max(0, Math.max(P(29).y, P(30).y, P(31).y, P(32).y) - ankY);
-    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax, segs: [[25, 27, 29], [26, 28, 30]].flatMap(([k, a, h]) => [{ a: P(k), b: P(a), ra: 5.2 * s, rb: 3.4 * s }, { a: P(a), b: P(h), ra: 3.4 * s, rb: 3.2 * s }]) }, bandTop: T.y }, waistTop: add(T, mul(u, D0)) };
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: [], zone: [T.y - 3 * s, o.H], ankles: { yMax: ankleMax, segs: [[25, 27, 29], [26, 28, 30]].flatMap(([k, a, h]) => [{ a: P(k), b: P(a), ra: 5.2 * s, rb: 3.4 * s }, { a: P(a), b: P(h), ra: 3.4 * s, rb: 3.2 * s }]) }, bandTop: T.y, waistLine: { l: wlL, r: wlR, u, show: true }, hipClip: { y0: T.y - 4 * s, y1: C.y + 2 * s, r: (0.8 + Math.max(0, 2 * gHip - body.hip) / 6.3) * s }, s }, waistTop: add(T, mul(u, D0)) };
   }
 
   // ---------------- 상의 ----------------
@@ -1999,7 +2001,98 @@
       { a: lerpV(P(a), P(b), 0.12), b: P(b), ra: 4.6 * s, rb: 3.9 * s, R: 6.5 * s },
       { a: P(b), b: P(c), ra: 3.8 * s, rb: 2.7 * s, R: 5.5 * s },
     ]).flat();
-    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: sleeves, armSkin, zone: [zoneTop, Math.max(hemC.y, hipMid.y) + 4 * s] } };
+    return { ok: true, notes, geo: { ...bodyGeo(P, s, body), noSkin: sleeves, armSkin, zone: [zoneTop, Math.max(hemC.y, hipMid.y) + 4 * s], shoulderClip: { y: armpitAt.y, r: (1.5 + drop * 0.6) * s, band: 4 * s }, neckHole: neck, s } };
+  }
+
+  // 아바타 옷 다듬기(3D 몸 실루엣을 알 때만). 상의는 1)·2)도:
+  // 1) 겨드랑이 위(어깨·소매 윗부분)는 몸 실루엣을 r만큼 키운 안쪽만 남긴다 → 각진 어깨 모서리가 둥근 어깨를 따라간다
+  // 2) 목둘레: 라운드넥 반타원 안쪽 천을 파내고(머리 층 아래가 수평으로 잘려 보이던 것) 목에 옷깃 그늘
+  function avatarGarmentShape(G, geo) {
+    const W = G.width, H = G.height;
+    const gg = G.getContext('2d', { willReadFrequently: true });
+    // 0) 반투명하게 번진 가장자리(상품 사진 오리기 경계)를 또렷하게: 소매·밑단이 두 겹으로 비치지 않게
+    {
+      const im = gg.getImageData(0, 0, W, H), d = im.data;
+      for (let i = 3; i < d.length; i += 4) { const a = d[i]; if (a && a < 255) { const t = Math.min(1, Math.max(0, (a - 70) / 110)); d[i] = Math.round(255 * t * t * (3 - 2 * t)); } }
+      gg.putImageData(im, 0, 0);
+    }
+    const c = geo.shoulderClip;
+    if (c) {
+      const m = buf('shoulderClip', W, H), mg = m.getContext('2d');
+      mg.setTransform(1, 0, 0, 1, 0, 0);
+      mg.globalCompositeOperation = 'source-over';
+      mg.clearRect(0, 0, W, H);
+      for (const f of [0.35, 0.7, 1]) for (let k = 0; k < 20; k++) {
+        const a = (k / 20) * Math.PI * 2;
+        mg.drawImage(avatarBody, Math.cos(a) * c.r * f, Math.sin(a) * c.r * f, W, H);
+      }
+      const gr = mg.createLinearGradient(0, c.y - c.band, 0, c.y);
+      gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)');
+      mg.fillStyle = gr; mg.fillRect(0, c.y - c.band, W, c.band);
+      mg.fillStyle = '#000'; mg.fillRect(0, c.y, W, H - c.y);
+      gg.save(); gg.globalCompositeOperation = 'destination-in'; gg.drawImage(m, 0, 0); gg.restore();
+    }
+    const nk = geo.neckHole;
+    if (nk && nk.length > 2) {
+      const s = geo.s || W / 200;
+      const a = nk[0], b = nk[nk.length - 1];
+      gg.save();
+      gg.globalCompositeOperation = 'destination-out';
+      gg.beginPath();
+      gg.moveTo(a.x, a.y - 30 * s);
+      nk.forEach((p) => gg.lineTo(p.x, p.y));
+      gg.lineTo(b.x, b.y - 30 * s);
+      gg.closePath();
+      gg.filter = `blur(${Math.max(0.6, s * 0.15)}px)`;
+      gg.fill();
+      gg.restore();
+      // 옷깃 두께: 목둘레 안쪽 가장자리를 살짝 어둡게(시보리 그늘)
+      gg.save();
+      gg.globalCompositeOperation = 'source-atop';
+      gg.strokeStyle = 'rgba(0,0,0,0.28)';
+      gg.lineWidth = 1.6 * s;
+      gg.filter = `blur(${s * 0.5}px)`;
+      gg.beginPath(); nk.forEach((p, i) => (i ? gg.lineTo(p.x, p.y) : gg.moveTo(p.x, p.y))); gg.stroke();
+      gg.restore();
+    }
+    // 3) 바지 허리·엉덩이: 엉덩이 실루엣(몸 + 여유)을 넘는 각진 모서리는 잘라 골반을 감싸게,
+    //    허리 윗선은 앞 가운데가 살짝 내려간 곡선(몸통을 두르는 띠를 약간 위에서 본 모양) + 위쪽 살에 닿는 그늘
+    const hc = geo.hipClip;
+    if (hc) {
+      const m = buf('hipClip', W, H), mg = m.getContext('2d');
+      mg.setTransform(1, 0, 0, 1, 0, 0);
+      mg.globalCompositeOperation = 'source-over';
+      mg.clearRect(0, 0, W, H);
+      for (const f of [0.5, 1]) for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        mg.drawImage(avatarBody, Math.cos(a) * hc.r * f, Math.sin(a) * hc.r * f, W, H);
+      }
+      mg.fillStyle = '#000';
+      mg.fillRect(0, 0, W, hc.y0); mg.fillRect(0, hc.y1, W, H - hc.y1);
+      gg.save(); gg.globalCompositeOperation = 'destination-in'; gg.drawImage(m, 0, 0); gg.restore();
+    }
+    const wl = geo.waistLine;
+    if (wl && wl.show) {
+      const s = geo.s || W / 200;
+      const dip = 1.3 * s;
+      const c = { x: (wl.l.x + wl.r.x) / 2 + wl.u.x * dip * 2, y: (wl.l.y + wl.r.y) / 2 + wl.u.y * dip * 2 };
+      gg.save();
+      gg.globalCompositeOperation = 'destination-out';
+      gg.beginPath();
+      gg.moveTo(wl.l.x - 10 * s, wl.l.y - 30 * s); gg.lineTo(wl.l.x - 10 * s, wl.l.y - 0.2 * s); gg.lineTo(wl.l.x, wl.l.y);
+      gg.quadraticCurveTo(c.x, c.y, wl.r.x, wl.r.y);
+      gg.lineTo(wl.r.x + 10 * s, wl.r.y - 0.2 * s); gg.lineTo(wl.r.x + 10 * s, wl.r.y - 30 * s);
+      gg.closePath(); gg.fill();
+      gg.restore();
+      // 허리 밴드 바로 위 살에 지는 얇은 그늘(밴드가 살을 살짝 누른다)
+      gg.save();
+      gg.globalCompositeOperation = 'destination-over';
+      gg.filter = `blur(${0.7 * s}px)`;
+      gg.strokeStyle = 'rgba(40,25,20,0.22)';
+      gg.lineWidth = 1.4 * s;
+      gg.beginPath(); gg.moveTo(wl.l.x + 1.5 * s, wl.l.y - 0.3 * s); gg.quadraticCurveTo(c.x, c.y - 0.6 * s, wl.r.x - 1.5 * s, wl.r.y - 0.3 * s); gg.stroke();
+      gg.restore();
+    }
   }
 
   function draw(ctx, opts) {
@@ -2035,6 +2128,7 @@
     gg.setTransform(1, 0, 0, 1, 0, 0);
     gg.clearRect(0, 0, G.width, G.height);
     const res = drawFn(gg, opts);
+    if (res.ok && avatarBody) avatarGarmentShape(G, res.geo);
     if (res.ok) composeScene(ctx, G, opts.scene, res.geo);
     return res;
   }

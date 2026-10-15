@@ -30,6 +30,8 @@ NV = len(V)
 print('verts', NV, 'faces', len(faces))
 
 def target(name):
+    if name is None: return np.zeros((NV, 3))
+    if '+' in name: return sum(target(x) for x in name.split('+'))
     d = np.zeros((NV, 3))
     path = None
     for root, _, files in os.walk(P('t')):
@@ -54,6 +56,34 @@ PAIRS = {
 for m in ['bust-circ', 'underbust-circ', 'waist-circ', 'hips-circ', 'thigh-circ', 'shoulder-dist', 'upperarm-circ', 'calf-circ',
           'neck-circ', 'upperleg-height', 'lowerleg-height', 'napetowaist-dist', 'waisttohip-dist', 'upperarm-length', 'lowerarm-length']:
     PAIRS[m] = ('measure-%s-incr' % m, 'measure-%s-decr' % m)
+
+# 얼굴 다듬기(그릴 때 값을 정한다): 이름 → (증가, 감소). 양쪽(l/r) 타깃은 + 로 합친다
+LR = lambda a: 'l-%s+r-%s' % (a, a)
+FACE = {
+    'lowerlip-vol': ('mouth-lowerlip-volume-incr', 'mouth-lowerlip-volume-decr'),
+    'lowerlip-h': ('mouth-lowerlip-height-incr', 'mouth-lowerlip-height-decr'),
+    'mouth-angle': ('mouth-angles-up', 'mouth-angles-down'),
+    'mouth-w': ('mouth-scale-horiz-incr', 'mouth-scale-horiz-decr'),
+    'chin-prom': ('chin-prominent-incr', 'chin-prominent-decr'),
+    'chin-w': ('chin-width-incr', 'chin-width-decr'),
+    'head-fat': ('head-fat-incr', 'head-fat-decr'),
+    'head-oval': ('head-oval', None),
+    'cheek-vol': (LR('cheek-volume-incr'), LR('cheek-volume-decr')),
+    'cheek-bones': (LR('cheek-bones-incr'), LR('cheek-bones-decr')),
+    'nose-w': ('nose-scale-horiz-incr', 'nose-scale-horiz-decr'),
+    'nose-point': ('nose-point-width-incr', 'nose-point-width-decr'),
+    'nose-flare': ('nose-flaring-incr', 'nose-flaring-decr'),
+    'nose-vol': ('nose-volume-incr', 'nose-volume-decr'),
+    'nose-hump': ('nose-hump-incr', 'nose-hump-decr'),
+    'brow-y': ('eyebrows-trans-up', 'eyebrows-trans-down'),
+    'brow-angle': ('eyebrows-angle-up', 'eyebrows-angle-down'),
+    'neck-w': ('neck-scale-horiz-incr', 'neck-scale-horiz-decr'),
+    'eye-open': (LR('eye-height2-incr'), LR('eye-height2-decr')),
+    'eye-bag': (LR('eye-bag-incr'), LR('eye-bag-decr')),
+    'eye-scale': (LR('eye-scale-incr'), LR('eye-scale-decr')),
+}
+if os.path.exists(os.path.join(DL, 't', 'head-oval.target')):
+    for k, v in FACE.items(): PAIRS['f.' + k] = v
 
 # ---------- 쓸 면: 몸(신체) ----------
 body_faces = [fv for g, fv in faces if g == 'body']
@@ -173,7 +203,8 @@ def add_proxy(name, tex, objname=None, kind='hair'):
 
 add_proxy('short02', 'hair.png', kind='hair')
 for _h in HAIR_ALT: add_proxy(_h, 'hair_%s.png' % _h, kind='hair')
-add_proxy('eyebrow001', 'eyebrow.png', kind='brow')
+BROW = os.environ.get('BROW', 'eyebrow001')  # 다른 눈썹(eyebrow002 등)을 시험할 때 BROW=이름
+add_proxy(BROW, 'eyebrow.png', kind='brow')
 add_proxy('eyelashes01', 'lashes.png', kind='lash')
 add_proxy('eyes', 'eye.png', kind='eye')
 add_proxy('shoes05', 'shoes.jpg', kind='shoes')
@@ -370,7 +401,16 @@ for _h in HAIR_ALT:
     a = np.asarray(im).astype(np.float32); l = (a[..., :3] @ np.array([0.3, 0.55, 0.15], np.float32))[..., None]
     a[..., :3] = l * np.array([1.0, 0.9, 0.82], np.float32)  # 색은 빼고 결(밝기)만: 그릴 때 머리색으로 물들인다
     Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(os.path.join(OUT, 'hair_%s.png' % _h), optimize=True)
-save('eyebrow001.png', 'eyebrow.png', 256, True)
+def thick_brow(src, dst, size):
+    # 눈썹: 작게 줄이면 가는 털이 흐려져 가는 선만 남는다 → 알파를 살짝 번지게 하고 진하게(숱 있는 눈썹)
+    from PIL import ImageFilter
+    im = Image.open(P(src)).convert('RGBA').resize((size, size), Image.LANCZOS)
+    a = np.asarray(im).astype(np.float32)
+    al = np.asarray(Image.fromarray(a[..., 3].astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.6))).astype(np.float32)
+    a[..., 3] = np.clip(al * 1.3, 0, 255)
+    a[..., :3] = np.minimum(a[..., :3], 90)
+    Image.fromarray(a.astype(np.uint8)).save(os.path.join(OUT, dst), optimize=True)
+thick_brow(BROW + '.png', 'eyebrow.png', 512)
 save('eyelashes01.png', 'lashes.png', 256, True)
 dark_iris('brownlight_eye.png', 'eye.png', 512)
 def clean_shoes(src, dst, size):
