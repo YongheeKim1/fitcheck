@@ -9,7 +9,7 @@ const Avatar3D = (() => {
   const BASE = 'models/human/';
   const CDN = 'https://cdn.jsdelivr.net/npm/three@0.169.0';
   const THREE_URL = CDN + '/build/three.module.min.js';
-  let data = null, THREE = null, renderer = null, loading = null;
+  let data = null, THREE = null, renderer = null, loading = null, studioEnv = null;
 
   // ---------- 데이터 읽기 ----------
   async function load() {
@@ -273,6 +273,27 @@ const Avatar3D = (() => {
     return g;
   }
 
+  // 사진 스튜디오 같은 환경: 안쪽을 보는 회색 상자 방에 밝은 판(소프트박스)을 왼쪽 앞 위·오른쪽·위에 둔다
+  function makeStudio() {
+    const room = new THREE.Scene();
+    const box = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), new THREE.MeshBasicMaterial({ color: 0x5a5652, side: THREE.BackSide }));
+    room.add(box);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshBasicMaterial({ color: 0x8a847e }));
+    floor.rotation.x = -Math.PI / 2; floor.position.y = -4.9; room.add(floor);
+    const panel = (w, h, x, y, z, lum, tint = [1, 1, 1]) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(tint[0] * lum, tint[1] * lum, tint[2] * lum), side: THREE.DoubleSide }));
+      m.position.set(x, y, z); m.lookAt(0, 0, 0); room.add(m);
+    };
+    panel(3.2, 4.2, -3, 2, 4.4, 9, [1, 0.96, 0.9]);  // 주광 소프트박스(왼쪽 앞 위)
+    panel(2.5, 4, 4.4, 0.5, 2, 3.5, [0.92, 0.96, 1]); // 보조(오른쪽)
+    panel(5, 2.5, 0, 4.8, 0, 4);                     // 천장
+    panel(3, 3, 1.5, 2.5, -4.6, 5);                  // 뒤 윤곽광
+    const pm = new THREE.PMREMGenerator(renderer);
+    const env = pm.fromScene(room, 0.03).texture;
+    pm.dispose();
+    return env;
+  }
+
   const hexRGB = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
 
   // ---------- 아바타 만들기 ----------
@@ -299,7 +320,7 @@ const Avatar3D = (() => {
     cam.updateProjectionMatrix();
 
     const skinT = data.tex['skin.jpg'];
-    const want = face?.skin || hexRGB(pc?.skin?.hex || '#d6ad8e'); // 내 얼굴을 넣으면 몸 피부를 그 얼굴색에 맞춘다
+    const want = face?.skin || hexRGB(pc?.skin?.hex || '#cf9f7c'); // 내 얼굴을 넣으면 몸 피부를 그 얼굴색에 맞춘다
     const tint = want.map((v, i) => Math.max(0.6, Math.min(1.35, v / data.skinAvg[i])));
     const skinMat = new THREE.MeshPhysicalMaterial({
       map: skinT, color: new THREE.Color(tint[0], tint[1], tint[2]).convertSRGBToLinear(),
@@ -369,8 +390,8 @@ const Avatar3D = (() => {
       for (let i = headParts.length - 1; i >= 0; i--) if (!headParts[i].visible) headParts.splice(i, 1);
     }
     // 조명: 왼쪽 위 앞 주광(그림자) + 오른쪽 보조광 + 뒤 윤곽광 + 하늘/바닥 반사
-    scene.add(new THREE.HemisphereLight(0xfff6ee, 0x6a5a52, 0.5));
-    const key = new THREE.DirectionalLight(0xfff1e4, 2.9);
+    scene.add(new THREE.HemisphereLight(0xfff6ee, 0x6a5a52, 0.18));
+    const key = new THREE.DirectionalLight(0xfff1e4, 2.2);
     key.position.set(-40, 170, 520); key.castShadow = true; // 거의 정면 위: 손·팔 그림자가 몸 뒤로 떨어지게
     key.shadow.mapSize.set(2048, 2048);
     Object.assign(key.shadow.camera, { left: -60, right: 60, top: 200, bottom: -10, near: 10, far: 900 });
@@ -385,7 +406,11 @@ const Avatar3D = (() => {
     }
     renderer.setPixelRatio(1);
     renderer.setSize(CW * SS, CH * SS, false);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.92;
+    // 스튜디오 반사광(환경 조명): 회색 방 + 소프트박스 3개를 미리 구워 피부·머리카락에 부드러운 빛과 반사를 준다
+    if (!studioEnv) studioEnv = makeStudio();
+    scene.environment = studioEnv;
+    scene.environmentIntensity = 0.45;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.84;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setClearColor(0x000000, 0);
 
