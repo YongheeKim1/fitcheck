@@ -393,7 +393,8 @@ function avatarPhoto() {
 // 실사 3D 아바타(avatar3d.js): 처음엔 2D 그림을 보여 주고, 3D가 다 그려지면 바꾼다(모델 첫 다운로드 약 4.5MB)
 async function buildAvatar3D(key) {
   try {
-    const p = await Avatar3D.build(state, usableAnalysis(), state.personalColor);
+    const face = typeof avatarFace !== 'undefined' ? avatarFace.data : null; // avatar.js: 내 얼굴(이 기기에만)
+    const p = await Avatar3D.build(state, usableAnalysis(), state.personalColor, face);
     if (tryon.avatar?.key !== key) return;
     const old = tryon.avatar.photo;
     tryon.avatar.photo3d = p;

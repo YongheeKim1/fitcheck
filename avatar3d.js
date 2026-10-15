@@ -276,7 +276,8 @@ const Avatar3D = (() => {
   const hexRGB = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
 
   // ---------- 아바타 만들기 ----------
-  async function build(state, analysis, pc) {
+  // face(선택): avatar.js makeFace() 결과 { img, chinY, centerX, faceW, skin } — 내 사진에서 오린 얼굴·머리카락
+  async function build(state, analysis, pc, face) {
     await load();
     const m = Avatar.measures(state, analysis);
     const { w } = fit(m);
@@ -298,7 +299,7 @@ const Avatar3D = (() => {
     cam.updateProjectionMatrix();
 
     const skinT = data.tex['skin.jpg'];
-    const want = hexRGB(pc?.skin?.hex || '#d6ad8e');
+    const want = face?.skin || hexRGB(pc?.skin?.hex || '#d6ad8e'); // 내 얼굴을 넣으면 몸 피부를 그 얼굴색에 맞춘다
     const tint = want.map((v, i) => Math.max(0.6, Math.min(1.35, v / data.skinAvg[i])));
     const skinMat = new THREE.MeshPhysicalMaterial({
       map: skinT, color: new THREE.Color(tint[0], tint[1], tint[2]).convertSRGBToLinear(),
@@ -362,6 +363,11 @@ const Avatar3D = (() => {
       if (p.kind !== 'shoes') headParts.push(mesh);
     }
 
+    // 내 얼굴을 넣으면 3D 눈썹·속눈썹·눈은 숨긴다(사진 얼굴이 덮는다). 3D 머리카락은 남겨 사진이 못 덮은 정수리를 채운다
+    if (face?.img) {
+      for (const o of scene.children) if (o.isMesh && ['brow', 'lash', 'eye'].includes(o.userData.kind)) o.visible = false;
+      for (let i = headParts.length - 1; i >= 0; i--) if (!headParts[i].visible) headParts.splice(i, 1);
+    }
     // 조명: 왼쪽 위 앞 주광(그림자) + 오른쪽 보조광 + 뒤 윤곽광 + 하늘/바닥 반사
     scene.add(new THREE.HemisphereLight(0xfff6ee, 0x6a5a52, 0.5));
     const key = new THREE.DirectionalLight(0xfff1e4, 2.9);
@@ -432,6 +438,7 @@ const Avatar3D = (() => {
     const headMesh = new THREE.Mesh(body.geometry.clone().setIndex(headTris), skinMat);
     headMesh.receiveShadow = true;
     const keep = scene.children.filter((o) => o.isMesh);
+    const keepVis = new Map(keep.map((o) => [o, o.visible]));
     keep.forEach((o) => { o.visible = headParts.includes(o); });
     scene.add(headMesh);
     // 머리카락이 목 뒤로 가려지게: 몸은 깊이만 쓴다
@@ -440,7 +447,7 @@ const Avatar3D = (() => {
     const head = shot();
     // 장면 분할: 1 머리카락(눈썹 포함), 2 몸, 3 얼굴
     occ.visible = false;
-    keep.forEach((o) => { o.visible = true; });
+    keep.forEach((o) => { o.visible = keepVis.get(o); });
     const flat = (c) => new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide });
     const saved = new Map();
     for (const o of [...keep, headMesh]) {
@@ -455,6 +462,32 @@ const Avatar3D = (() => {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     for (const [o, mt] of saved) { o.material.dispose(); o.material = mt; }
     scene.remove(headMesh, occ);
+
+    // 내 얼굴 붙이기: 사진 얼굴 폭을 3D 얼굴 폭(광대 사이)에, 턱을 3D 턱에, 가운데를 몸 가운데에 맞춘다
+    let facePaste = null;
+    if (face?.img) {
+      const toPxL = (x, y) => ({ x: CW / 2 + x * s, y: FLOOR - y * s });
+      let chinY = Infinity, noseZ = -Infinity, noseY = 0;
+      for (let i = 0; i < hw.length; i++) {
+        if (hw[i] < 240) continue;
+        const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+        if (Math.abs(x) < 1.5 && z > 0 && y < chinY) chinY = y;
+        if (Math.abs(x) < 1.5 && z > noseZ) { noseZ = z; noseY = y; }
+      }
+      // 광대 높이(코끝보다 살짝 위)에서 앞쪽(귀 빼고) 정점들의 좌우 폭
+      let x0 = Infinity, x1 = -Infinity;
+      for (let i = 0; i < hw.length; i++) {
+        if (hw[i] < 240) continue;
+        const y = P[i * 3 + 1], z = P[i * 3 + 2];
+        if (Math.abs(y - (noseY + 1.5)) < 1.2 && z > noseZ - 7) { x0 = Math.min(x0, P[i * 3]); x1 = Math.max(x1, P[i * 3]); }
+      }
+      // 3D 턱 아래쪽 면을 그대로 두면 사진 턱선 밖으로 비친다: 얼굴 폭은 광대 폭, 턱은 3D 턱보다 0.3cm 아래
+      const fw = (x1 - x0) * s;
+      const k = (fw / Math.max(1, face.faceW)) * 1.04;
+      const chin = toPxL(0, chinY - 0.3);
+      facePaste = { k, x: CW / 2 - face.centerX * k, y: chin.y - face.chinY * k, eyeY: toPxL(0, noseY + 3.5).y, fw };
+      for (const cv of [full, head]) cv.getContext('2d').drawImage(face.img, facePaste.x, facePaste.y, face.img.width * k, face.img.height * k);
+    }
 
     // 바탕(스튜디오 회색 그라데이션 + 발밑 그림자) 위에 합치기
     const canvas = document.createElement('canvas'); canvas.width = CW; canvas.height = CH;
@@ -477,6 +510,14 @@ const Avatar3D = (() => {
       const r = id[i * 4], gg = id[i * 4 + 1], b = id[i * 4 + 2];
       if (id[i * 4 + 3] < 128) continue;
       cat[i] = r > gg && r > b ? 1 : gg > b ? 3 : 2;
+    }
+    if (facePaste) {
+      const fc = document.createElement('canvas'); fc.width = sw; fc.height = sh;
+      const fg = fc.getContext('2d', { willReadFrequently: true });
+      fg.drawImage(face.img, facePaste.x / 2, facePaste.y / 2, face.img.width * facePaste.k / 2, face.img.height * facePaste.k / 2);
+      const fa = fg.getImageData(0, 0, sw, sh).data;
+      const hairRow = (facePaste.eyeY - facePaste.fw * 0.32) / 2; // 대략 눈썹 위는 머리카락
+      for (let i = 0; i < sw * sh; i++) if (fa[i * 4 + 3] > 127) cat[i] = Math.floor(i / sw) < hairRow ? 1 : 3;
     }
     // 피부색(가슴 가운데 평균)
     const chestPx = c.getImageData(cx - 4 * s, toPy(jpos(P, 'breast.L____head')[1] + 4), 8 * s, 6 * s).data;
@@ -527,7 +568,7 @@ const Avatar3D = (() => {
       isAvatar: true,
       depthShade: shadeMap, // 3D 조명에서 얻은 옷 명암(AI 깊이 추정 대신)
     };
-    return { canvas, pose: lm, pxPerCm: s, scene: sceneOut, poseCheck: { ok: true, issues: [] }, isAvatar: true, is3D: true, measures: m, fitted: meas, hasFace: false };
+    return { canvas, pose: lm, pxPerCm: s, scene: sceneOut, poseCheck: { ok: true, issues: [] }, isAvatar: true, is3D: true, measures: m, fitted: meas, hasFace: !!face?.img };
   }
 
   return { load, build, fit, measure, morph };
