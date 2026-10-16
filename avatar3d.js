@@ -311,7 +311,7 @@ const Avatar3D = (() => {
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
   const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35, lipClose: 0.2, fringe: 4.2, headTilt: 1.5 };
-  const HAND_CURL = { palmSign: -1, seg: [7, 16, 10], more: 0.8, close: 1, thumb: [0, 8, 8], thumbIn: -55, scale: 0.95 };
+  const HAND_CURL = { palmSign: -1, seg: [5, 10, 8], more: 2.4, close: 1, thumb: [10, 8, 8], thumbIn: -55, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
   function normals(P) {
@@ -405,7 +405,9 @@ const Avatar3D = (() => {
         for (let i = 0; i < n; i++) {
           const d = (S[i * 3] - P[i * 3]) * N[i * 3] + (S[i * 3 + 1] - P[i * 3 + 1]) * N[i * 3 + 1] + (S[i * 3 + 2] - P[i * 3 + 2]) * N[i * 3 + 2];
           // 큰 굴곡은 얼굴(눈두덩·콧방울·입꼬리)에만 진하게: 몸통에 쓰면 가슴·쇄골에 멍처럼 얼룩진다
-          const wgt = it === 3 ? 0.15 + 0.4 * (hw[i] / 255) : 0.06 + 0.28 * (hw[i] / 255); // 몸통도 아주 약하게(쇄골·가슴 윤곽)
+          // 얼굴 큰 굴곡 그늘은 아래를 향한 면(턱 밑·코 밑)에 주로: 옆을 보는 턱선은 약하게(턱선 갈색 띠 방지)
+          const down = Math.min(1, Math.max(0.3, (-N[i * 3 + 1] + 0.05) / 0.35));
+          const wgt = it === 3 ? 0.15 + 0.4 * (hw[i] / 255) : 0.06 + 0.28 * (hw[i] / 255) * down; // 몸통도 아주 약하게(쇄골·가슴 윤곽)
           out[i] += Math.max(0, Math.min(1, d / sc)) * wgt;
         }
       }
@@ -759,7 +761,7 @@ float armParam(vec3 p) {
         // 바지와 함께 입으면 허리 아래 몸판을 0.6cm 더 띄워 바지 허리가 옆으로 뚫고 나오지 않게
         const over = outfit.bottom?.g ? 0.6 * Math.min(1, Math.max(0, (crotchY + 22 - y) / 6)) : 0;
         // 소매 윗부분(어깨 관절에서 6cm 안)은 0.5cm까지만: 부푼 소매산 방지
-        return aS >= 0 ? (Math.min(0.5, chestE * Math.max(0, 1 - aS / 6)) - 0.25 * Math.min(1, Math.max(0, (aS - 3) / 5))) * f : chestE * f + over;
+        return aS >= 0 ? (Math.min(aS < 4 ? 0.15 : 0.5, chestE * Math.max(0, 1 - aS / 6)) - 0.25 * Math.min(1, Math.max(0, (aS - 3) / 5))) * f : chestE * f + over;
       };
       const zcT = jpos(cmP, 'spine03____head')[2];
       const radialT = (x, y, z) => (armParamJS(X.cmP, x, y, z) >= 0 ? 0 : Math.min(1, Math.max(0, (neckY - 4 - y) / 8)));

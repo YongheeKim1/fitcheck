@@ -372,6 +372,14 @@ def even_skin(src, dst):
     # 입술 사이 틈이 검게 벌어져 보이지 않게: 입술 안 어두운 곳을 입술색의 70%까지 올린다
     floor_ = rose * 0.62
     out = out * (1 - lip) + np.maximum(out, floor_) * lip
+    # 얼굴 조각 선명하게(언샤프 마스크, 반지름 약 1.5px, 0.6)와 볼·코 혈색 3%: 확대했을 때 흐릿한 밀랍처럼 보이지 않게
+    hsel = ((xx > 1300) & (yy < 1760))[..., None].astype(np.float32)
+    soft = blur(out, 2)
+    out = out + 0.6 * (out - soft) * hsel
+    cheeks = np.zeros((H, W), np.float32)
+    for cx, cy, rx, ry in [(1760, 870, 120, 90), (1760, 1250, 120, 90), (1795, 1060, 40, 45)]:
+        cheeks = np.maximum(cheeks, np.clip(1 - ((xx - cx) / rx) ** 2 - ((yy - cy) / ry) ** 2, 0, 1))
+    out = out * (1 + cheeks[..., None] * np.array([0.03, -0.01, -0.01], np.float32))
     # 입 안 조각(입술 안쪽·잇몸·혀): 피부색으로 펴면 다문 입술 사이가 밝은 줄로 보인다 → 원래 색을 어둡게 되돌린다
     mouth = np.zeros((H, W), bool)
     mouth[720:940, 0:290] = True; mouth[1740:, 1540:1990] = True
