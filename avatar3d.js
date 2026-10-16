@@ -310,7 +310,7 @@ const Avatar3D = (() => {
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35, lipClose: 0.2 };
+  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35, lipClose: 0.2, fringe: 4.2, headTilt: 1.5 };
   const HAND_CURL = { palmSign: -1, seg: [7, 16, 10], more: 0.8, close: 1, thumb: [0, 8, 8], thumbIn: -55, scale: 0.95 };
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
@@ -756,7 +756,10 @@ float armParam(vec3 p) {
         const aS = armParamJS(X.cmP, x, y, z);
         const f = Math.min(1, Math.max(0, (neckY - 2 - y) / 10));
         // 소매는 몸통 여유를 거의 받지 않는다(진동에서 6cm 안에 서서히 줄여 0.2cm): 풍선 소매 방지
-        return aS >= 0 ? (chestE * Math.max(0, 1 - aS / 6) - 0.25 * Math.min(1, Math.max(0, (aS - 3) / 5))) * f : chestE * f; // 소매는 팔 쪽으로 0.5cm 당긴다(풍선 소매 방지, 밑 팔은 숨겨짐)
+        // 바지와 함께 입으면 허리 아래 몸판을 0.6cm 더 띄워 바지 허리가 옆으로 뚫고 나오지 않게
+        const over = outfit.bottom?.g ? 0.6 * Math.min(1, Math.max(0, (crotchY + 22 - y) / 6)) : 0;
+        // 소매 윗부분(어깨 관절에서 6cm 안)은 0.5cm까지만: 부푼 소매산 방지
+        return aS >= 0 ? (Math.min(0.5, chestE * Math.max(0, 1 - aS / 6)) - 0.25 * Math.min(1, Math.max(0, (aS - 3) / 5))) * f : chestE * f + over;
       };
       const zcT = jpos(cmP, 'spine03____head')[2];
       const radialT = (x, y, z) => (armParamJS(X.cmP, x, y, z) >= 0 ? 0 : Math.min(1, Math.max(0, (neckY - 4 - y) / 8)));
@@ -860,6 +863,16 @@ float armParam(vec3 p) {
       }
     }
     if (POSE.lipClose) closeLips(cmH, POSE.lipClose);
+    // 머리를 아주 조금(1.5도) 기울여 마네킹 같은 완전 대칭을 깬다(목 관절 중심, 머리 가중치만큼)
+    if (POSE.headTilt) {
+      const hw0 = data.w.head, c0 = jpos(cmH, 'neck03____head'), a = (POSE.headTilt * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
+      for (let i = 0; i < hw0.length; i++) {
+        const w = hw0[i] / 255; if (!w) continue;
+        const x = cmH[i * 3] - c0[0], y = cmH[i * 3 + 1] - c0[1];
+        cmH[i * 3] += w * (c0[0] + x * ca - y * sa - cmH[i * 3]);
+        cmH[i * 3 + 1] += w * (c0[1] + x * sa + y * ca - cmH[i * 3 + 1]);
+      }
+    }
     const posed = poseLimbs(cmH, POSE.arm, POSE.leg, POSE.twist, POSE.fore);
     P = posed.P;
     const N = normals(P);
@@ -876,7 +889,7 @@ float armParam(vec3 p) {
     const tint = want.map((v, i) => Math.max(0.6, Math.min(1.35, v / data.skinAvg[i])));
     const skinMat = new THREE.MeshPhysicalMaterial({
       map: skinT, color: new THREE.Color(tint[0], tint[1], tint[2]).convertSRGBToLinear(),
-      roughness: 0.58, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.9, 0.45, 0.38), clearcoat: 0.05, clearcoatRoughness: 0.6,
+      roughness: 0.63, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.9, 0.45, 0.38), clearcoat: 0.05, clearcoatRoughness: 0.6,
       ...(POSE.pores ? { bumpMap: poreTex(), bumpScale: POSE.pores } : {}), // 모공 결: 매끈한 플라스틱 피부 대신 빛이 잘게 흩어지게
     });
     const body = new THREE.Mesh(geom(data.body.ref, data.body.uv, data.body.tris, P, N), skinMat);
@@ -934,20 +947,20 @@ float armParam(vec3 p) {
     const hairName = data.proxies.some((p) => p.name === POSE.hair) ? POSE.hair : 'short02';
     // 앞머리·옆머리 끝(이마 높이 아래)만 세로 가닥 노이즈로 알파를 깎아 성글게(텍스처 이음매가 있는 정수리는 건드리지 않는다)
     const eyeY = (jpos(P, 'eye.L____head')[1] + jpos(P, 'eye.R____head')[1]) / 2;
-    const fringeU = { uFringe: { value: eyeY + 6.5 } };
+    const eyeZ = (jpos(P, 'eye.L____head')[2] + jpos(P, 'eye.R____head')[2]) / 2;
+    const fringeU = { uFringe: { value: eyeY + POSE.fringe }, uFrontZ: { value: eyeZ } };
     const fringe = (m) => {
       m.onBeforeCompile = (sh) => {
         Object.assign(sh.uniforms, fringeU);
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nuniform float uFringe;')
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nuniform float uFringe, uFrontZ;')
           .replace('#include <alphamap_fragment>', `#include <alphamap_fragment>
             {
-              float lowF = 1.0 - smoothstep(uFringe - 0.5, uFringe + 1.5, vWP.y);
-              float col = floor(vWP.x * 14.0);
-              float n = fract(sin(col * 12.9898 + floor(vWP.z * 6.0) * 4.1) * 43758.5453);
-              float tip = fract(sin(col * 78.233) * 9871.1) * 1.6;
-              float s = smoothstep(0.0, 1.0, (vWP.y - (uFringe - 8.0) + tip) / 1.4);
-              diffuseColor.a *= mix(1.0, s * (0.35 + 0.65 * n), lowF);
+              // 앞머리 끝: 눈썹을 따라 관자놀이 쪽이 1.2cm 높은 아치 + 낮은 주파수 굴곡, 7mm에 걸쳐 부드럽게 옅어진다(앞쪽 머리만)
+              float ax = abs(vWP.x);
+              float cut = uFringe + 0.9 * smoothstep(1.5, 6.5, ax) + 0.25 * sin(vWP.x * 1.3) + 0.15 * sin(vWP.x * 2.9 + 1.0);
+              float front = smoothstep(uFrontZ - 5.0, uFrontZ - 0.5, vWP.z);
+              diffuseColor.a *= mix(1.0, smoothstep(cut - 0.7, cut + 0.05, vWP.y), front);
             }`);
       };
       m.customProgramCacheKey = () => 'hair-fringe-' + (m.transparent ? 't' : 'o');
