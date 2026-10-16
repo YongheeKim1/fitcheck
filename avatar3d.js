@@ -305,13 +305,13 @@ const Avatar3D = (() => {
   }
   const FACE = {
     'lowerlip-vol': -0.7, 'lowerlip-h': -0.3, 'lowerlip-mid': 0.8, 'upperlip-mid': -0.6, 'mouth-angle': 0.3, 'mouth-w': -0.1,
-    'chin-prom': 0.25, 'chin-w': -0.45, 'head-fat': -0.5, 'head-oval': 0,
+    'chin-prom': 0.25, 'chin-w': -0.15, 'head-fat': -0.5, 'head-oval': 0,
     'cheek-vol': -0.6, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35, lipClose: 0.2, fringe: 4.2, headTilt: 1.5 };
-  const HAND_CURL = { palmSign: -1, seg: [5, 10, 8], more: 2.4, close: 1, thumb: [10, 8, 8], thumbIn: -55, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
+  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0 };
+  const HAND_CURL = { palmSign: -1, seg: [5, 11, 8], more: 1.6, close: 1, thumb: [10, 8, 8], thumbIn: -55, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
   function normals(P) {
@@ -407,7 +407,8 @@ const Avatar3D = (() => {
           // 큰 굴곡은 얼굴(눈두덩·콧방울·입꼬리)에만 진하게: 몸통에 쓰면 가슴·쇄골에 멍처럼 얼룩진다
           // 얼굴 큰 굴곡 그늘은 아래를 향한 면(턱 밑·코 밑)에 주로: 옆을 보는 턱선은 약하게(턱선 갈색 띠 방지)
           const down = Math.min(1, Math.max(0.3, (-N[i * 3 + 1] + 0.05) / 0.35));
-          const wgt = it === 3 ? 0.15 + 0.4 * (hw[i] / 255) : 0.06 + 0.28 * (hw[i] / 255) * down; // 몸통도 아주 약하게(쇄골·가슴 윤곽)
+          const handW = (data.w.handL[i] + data.w.handR[i]) / 255; // 손가락 끝·손톱에 갈색 얼룩이 생기지 않게 손은 약하게
+          const wgt = (it === 3 ? 0.15 + 0.4 * (hw[i] / 255) : 0.06 + 0.28 * (hw[i] / 255) * down) * (1 - 0.8 * Math.min(1, handW)); // 몸통도 아주 약하게(쇄골·가슴 윤곽)
           out[i] += Math.max(0, Math.min(1, d / sc)) * wgt;
         }
       }
@@ -875,6 +876,13 @@ float armParam(vec3 p) {
         cmH[i * 3 + 1] += w * (c0[1] + x * sa + y * ca - cmH[i * 3 + 1]);
       }
     }
+    // 어깨 끝을 조금 내린다(승모근이 곡선으로 이어지게): 팔 가중치만큼, 오른쪽(화면 왼쪽)을 0.5cm 더(완전 대칭 깨기)
+    if (POSE.shoulderDrop) {
+      for (const [sd, extra] of [['L', 0], ['R', 0.5]]) {
+        const W = data.w['arm' + sd];
+        for (let i = 0; i < W.length; i++) if (W[i]) cmH[i * 3 + 1] -= (POSE.shoulderDrop + extra) * (W[i] / 255);
+      }
+    }
     const posed = poseLimbs(cmH, POSE.arm, POSE.leg, POSE.twist, POSE.fore);
     P = posed.P;
     const N = normals(P);
@@ -912,13 +920,14 @@ float armParam(vec3 p) {
     for (const i of data.meta.crotch) if (Math.abs(cmP[i * 3]) < 1) crotchY = Math.max(crotchY, cmP[i * 3 + 1]);
     const briefU = { uTop: { value: hipY + 7.5 }, uBot: { value: crotchY - 7 }, uHalf: { value: GarmentRender.visW(m.hip, 'hip') / 2 + 4 }, uCav: { value: POSE.cav } };
     // 3D 옷을 입혔을 때 옷 밑 몸 숨기기(dress()가 값을 바꾼다): 덮는 정점(aCov)이면서 옷이 남은 자리
+    briefU.uClav = { value: new THREE.Vector3(0, jpos(cmP, 'neck01____head')[1] - 4.2, jpos(cmP, 'neck01____head')[2]) };
     Object.assign(briefU, { uTopOn: { value: 0 }, uBotOn: { value: 0 }, uHem: { value: -1e3 }, uSleeve: { value: -1 }, uWaist: { value: -1e3 }, uPHem: { value: 1e3 }, uHemM: { value: -1e3 }, uSleeveM: { value: 100 }, uWaistM: { value: 1e3 }, uPHemM: { value: -1e3 }, uZc: { value: 0 }, ...clothArmUniforms(cmP) });
     body.geometry.setAttribute('aCov', new THREE.BufferAttribute(new Float32Array(data.body.ref.length * 2), 2));
     skinMat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, briefU);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nattribute float cav;\nattribute vec2 aCov;\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;\nvCav = cav;\nvCov = aCov;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nfloat briefM;\n' + CLOTH_GLSL)
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nuniform vec3 uClav;\nfloat briefM;\n' + CLOTH_GLSL)
         .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
           {
             if (uTopOn > 0.5 && vCov.x > 0.99) discard;
@@ -927,6 +936,18 @@ float armParam(vec3 p) {
         .replace('#include <map_fragment>', `#include <map_fragment>
           diffuseColor.rgb *= (1.0 - 0.4 * vHairOcc) * (1.0 - uCav * vCav) ; // 앞머리 아래 그늘 · 오목한 곳 그늘(따뜻한 쪽으로)
           diffuseColor.r += uCav * vCav * 0.04;
+          {
+            // 피부 얼룩(1~2cm 크기, 밝기 ±3%): 밀랍처럼 고른 피부 대신
+            vec3 q = vRest;
+            float mot = sin(q.x * 3.7 + q.y * 1.3) * sin(q.y * 4.3 - q.z * 2.1) + 0.6 * sin(q.x * 6.1 - q.y * 5.3 + q.z * 3.3);
+            diffuseColor.rgb *= 1.0 + 0.02 * mot;
+            // 쇄골: 목 밑에서 어깨 쪽으로 살짝 올라가는 선 아래로 옅은 그늘, 뼈 위는 조금 밝게(앞쪽만)
+            float ax = abs(vRest.x);
+            float line = uClav.y + 0.1 * ax - 0.004 * ax * ax;
+            float d = line - vRest.y;
+            float frontC = smoothstep(uClav.z - 4.0, uClav.z + 2.0, vRest.z) * (1.0 - smoothstep(13.0, 16.0, ax)) * smoothstep(1.5, 3.0, ax);
+            diffuseColor.rgb *= 1.0 - frontC * (0.07 * smoothstep(0.5, 1.0, d) * (1.0 - smoothstep(1.4, 2.4, d)) - 0.03 * (1.0 - smoothstep(0.0, 0.6, abs(d + 0.3))));
+          }
           {
             float e = max(fwidth(vRest.y), 0.05);
             float ax = abs(vRest.x);
@@ -1059,7 +1080,7 @@ float armParam(vec3 p) {
     // 조명: 왼쪽 위 앞 주광(그림자) + 오른쪽 보조광 + 뒤 윤곽광 + 하늘/바닥 반사
     scene.add(new THREE.HemisphereLight(0xfff6ee, 0x6a5a52, 0.18));
     const key = new THREE.DirectionalLight(0xfff1e4, LIGHT.key);
-    key.position.set(-110, 230, 480); key.castShadow = true; // 왼쪽 위 앞: 코 반대편·광대 아래에 부드러운 그늘
+    key.position.set(LIGHT.keyX ?? -110, 230, 480); key.castShadow = LIGHT.shadow !== false; // 왼쪽 위 앞: 코 반대편·광대 아래에 부드러운 그늘
     key.shadow.mapSize.set(1024, 1024);
     Object.assign(key.shadow.camera, { left: -60, right: 60, top: 200, bottom: -10, near: 10, far: 900 });
     key.shadow.bias = -0.0004; key.shadow.normalBias = 0.6; key.shadow.radius = 18; key.shadow.blurSamples = 24;

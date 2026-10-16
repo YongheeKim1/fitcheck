@@ -345,6 +345,7 @@ def even_skin(src, dst):
     legs = np.clip((yy - 1050) / 200, 0, 1) * (xx < 1320)
     k = k * (1 - legs) + 0.45 * legs
     k[(xx > 1300) & (yy < 1760)] = 0.62  # 얼굴·두피: 잔결이 거칠어 보이지 않게
+    k[(xx > 740) & (xx < 1580) & (yy > 1620)] = 0.35  # 손(손톱 끝 갈색 얼룩 줄이기)
     def ell(cx, cy, rx, ry):
         d = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
         return np.clip(1.6 - d, 0, 1) ** 1.5 * (d < 1.6)
