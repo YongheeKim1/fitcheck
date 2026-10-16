@@ -368,7 +368,7 @@ def even_skin(src, dst):
     rose = np.array([201, 138, 128], np.float32)
     lum_o = out.mean(-1, keepdims=True)
     lipc = rose * np.clip(lum_o / 150, 0.75, 1.15)
-    out = out * (1 - lip * 0.55) + lipc * lip * 0.55
+    out = out * (1 - lip * 0.62) + lipc * lip * 0.62
     # 입술 사이 틈이 검게 벌어져 보이지 않게: 입술 안 어두운 곳을 입술색의 70%까지 올린다
     floor_ = rose * 0.62
     out = out * (1 - lip) + np.maximum(out, floor_) * lip

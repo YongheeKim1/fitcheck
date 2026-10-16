@@ -405,7 +405,7 @@ const Avatar3D = (() => {
         for (let i = 0; i < n; i++) {
           const d = (S[i * 3] - P[i * 3]) * N[i * 3] + (S[i * 3 + 1] - P[i * 3 + 1]) * N[i * 3 + 1] + (S[i * 3 + 2] - P[i * 3 + 2]) * N[i * 3 + 2];
           // 큰 굴곡은 얼굴(눈두덩·콧방울·입꼬리)에만 진하게: 몸통에 쓰면 가슴·쇄골에 멍처럼 얼룩진다
-          const wgt = it === 3 ? 0.15 + 0.4 * (hw[i] / 255) : 0.06 + 0.5 * (hw[i] / 255); // 몸통도 아주 약하게(쇄골·가슴 윤곽)
+          const wgt = it === 3 ? 0.15 + 0.4 * (hw[i] / 255) : 0.06 + 0.28 * (hw[i] / 255); // 몸통도 아주 약하게(쇄골·가슴 윤곽)
           out[i] += Math.max(0, Math.min(1, d / sc)) * wgt;
         }
       }
@@ -591,7 +591,7 @@ float armParam(vec3 p) {
     let L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     let c = [r, g, b];
     if (L < 0.22) { const t = Math.min(1, (1 - L / 0.22) * 1.3) * 0.9; c = c.map((v) => v * (1 - t) + L * t); }
-    if (L < 0.07) { const k = 0.07 / Math.max(0.005, L); c = c.map((v) => Math.min(1, v * k + (0.07 - L) * (L < 0.005 ? 1 : 0))); }
+    if (L < 0.09) { const k = 0.09 / Math.max(0.005, L); c = c.map((v) => Math.min(1, v * k + (0.09 - L) * (L < 0.005 ? 1 : 0))); }
     return new THREE.Color(c[0], c[1], c[2]).convertSRGBToLinear();
   }
 
@@ -649,6 +649,22 @@ float armParam(vec3 p) {
         PP[i * 3 + 1] -= d; R[i * 3 + 1] -= d;
       }
     }
+    // 소매(팔 정점)는 넓힌 뒤 이웃 평균으로 3번 다듬는다: 정점마다 다른 여유 때문에 각진 다면체처럼 보이지 않게
+    {
+      const nb = Array.from({ length: n }, () => new Set());
+      for (let k = 0; k < t.length; k += 3) for (let e = 0; e < 3; e++) { const a = ref[t[k + e]], b = ref[t[k + (e + 1) % 3]]; if (a !== b) { nb[a].add(b); nb[b].add(a); } }
+      for (let it2 = 0; it2 < 3; it2++) {
+        const Q = new Float32Array(PP);
+        for (let i = 0; i < n; i++) {
+          if (!used[i] || !isArm[i] || !nb[i].size) continue;
+          let x = 0, y = 0, z = 0;
+          for (const j of nb[i]) { x += PP[j * 3]; y += PP[j * 3 + 1]; z += PP[j * 3 + 2]; }
+          const m = nb[i].size;
+          Q[i * 3] = PP[i * 3] * 0.5 + (x / m) * 0.5; Q[i * 3 + 1] = PP[i * 3 + 1] * 0.5 + (y / m) * 0.5; Q[i * 3 + 2] = PP[i * 3 + 2] * 0.5 + (z / m) * 0.5;
+        }
+        PP.set(Q);
+      }
+    }
     const g = geom(ref, it.uv, t, PP, null);
     const rest = new Float32Array(ref.length * 3);
     for (let i = 0; i < ref.length; i++) for (let k = 0; k < 3; k++) rest[i * 3 + k] = R[ref[i] * 3 + k];
@@ -682,7 +698,7 @@ float armParam(vec3 p) {
           if (vRest.y > uWaist || vRest.y < uPHem) discard;
           float edgeD = min(uWaist - vRest.y, vRest.y - uPHem);`)
         // 안쪽 면(밑단·소매 안으로 보이는 곳)은 어둡게
-        .replace('#include <map_fragment>', '#include <map_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= ' + (kind === 'top' ? '0.45' : '0.8') + ';' // 바지는 앞 지퍼 쪽 겹친 천 사이로 안쪽이 보여 덜 어둡게
+        .replace('#include <map_fragment>', '#include <map_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= ' + (kind === 'top' ? '0.7' : '0.8') + ';' // 바지는 앞 지퍼 쪽 겹친 천 사이로 안쪽이 보여 덜 어둡게
           + '\ndiffuseColor.rgb *= mix(0.82, 1.0, smoothstep(1.2, 1.5, edgeD));'); // 밑단·소매 끝 접어 박은 단(1.2~1.5cm, 18% 어둡게)
     };
     return mat;
@@ -740,7 +756,7 @@ float armParam(vec3 p) {
         const aS = armParamJS(X.cmP, x, y, z);
         const f = Math.min(1, Math.max(0, (neckY - 2 - y) / 10));
         // 소매는 몸통 여유를 거의 받지 않는다(진동에서 6cm 안에 서서히 줄여 0.2cm): 풍선 소매 방지
-        return aS >= 0 ? (chestE * Math.max(0, 1 - aS / 6) - 0.5 * Math.min(1, Math.max(0, (aS - 3) / 5))) * f : chestE * f; // 소매는 팔 쪽으로 0.5cm 당긴다(풍선 소매 방지, 밑 팔은 숨겨짐)
+        return aS >= 0 ? (chestE * Math.max(0, 1 - aS / 6) - 0.25 * Math.min(1, Math.max(0, (aS - 3) / 5))) * f : chestE * f; // 소매는 팔 쪽으로 0.5cm 당긴다(풍선 소매 방지, 밑 팔은 숨겨짐)
       };
       const zcT = jpos(cmP, 'spine03____head')[2];
       const radialT = (x, y, z) => (armParamJS(X.cmP, x, y, z) >= 0 ? 0 : Math.min(1, Math.max(0, (neckY - 4 - y) / 8)));
@@ -916,6 +932,27 @@ float armParam(vec3 p) {
     const hairRGB = hexRGB(pc?.hair?.hex || '#1e1712');
     const headParts = [];
     const hairName = data.proxies.some((p) => p.name === POSE.hair) ? POSE.hair : 'short02';
+    // 앞머리·옆머리 끝(이마 높이 아래)만 세로 가닥 노이즈로 알파를 깎아 성글게(텍스처 이음매가 있는 정수리는 건드리지 않는다)
+    const eyeY = (jpos(P, 'eye.L____head')[1] + jpos(P, 'eye.R____head')[1]) / 2;
+    const fringeU = { uFringe: { value: eyeY + 6.5 } };
+    const fringe = (m) => {
+      m.onBeforeCompile = (sh) => {
+        Object.assign(sh.uniforms, fringeU);
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nuniform float uFringe;')
+          .replace('#include <alphamap_fragment>', `#include <alphamap_fragment>
+            {
+              float lowF = 1.0 - smoothstep(uFringe - 0.5, uFringe + 1.5, vWP.y);
+              float col = floor(vWP.x * 14.0);
+              float n = fract(sin(col * 12.9898 + floor(vWP.z * 6.0) * 4.1) * 43758.5453);
+              float tip = fract(sin(col * 78.233) * 9871.1) * 1.6;
+              float s = smoothstep(0.0, 1.0, (vWP.y - (uFringe - 8.0) + tip) / 1.4);
+              diffuseColor.a *= mix(1.0, s * (0.35 + 0.65 * n), lowF);
+            }`);
+      };
+      m.customProgramCacheKey = () => 'hair-fringe-' + (m.transparent ? 't' : 'o');
+      return m;
+    };
     for (const p of data.proxies) {
       if (p.kind === 'hair' && p.name !== hairName) continue;
       const PP = proxyPos(p, P, p.kind === 'hair' ? POSE.hairThick : 1); // 머리카락은 두피에 더 붙여 헬멧처럼 부풀지 않게
@@ -959,6 +996,7 @@ float armParam(vec3 p) {
       if (p.kind === 'hair') {
         const ht = hairRGB.map((v, i) => Math.max(0.05, Math.min(2.5, v / Math.max(8, data.hairAvg[p.name][i]))));
         mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], ...(p.name === 'short02' && POSE.hairNormal ? { normalMap: data.tex['hair_n.jpg'], normalScale: new THREE.Vector2(POSE.hairNormal, POSE.hairNormal) } : {}), ...(POSE.hairBump ? { bumpMap: strandTex(), bumpScale: POSE.hairBump } : {}), color: new THREE.Color(ht[0], ht[1], ht[2]).convertSRGBToLinear(), roughness: 0.62, specularIntensity: 0.35, sheen: 0.35, sheenRoughness: 0.4, sheenColor: new THREE.Color(0.4, 0.32, 0.26), alphaTest: 0.55, alphaToCoverage: true, side: THREE.DoubleSide });
+        fringe(mat);
       } else if (p.kind === 'brow' || p.kind === 'lash') {
         mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(Math.min(1, hairRGB[0] / 255 * 1.5), Math.min(1, hairRGB[1] / 255 * 1.5), Math.min(1, hairRGB[2] / 255 * 1.5)).convertSRGBToLinear() : new THREE.Color(0.06, 0.05, 0.045), roughness: 0.8, ...(p.kind === 'lash' && POSE.lashOpaque ? { alphaTest: 0.4 } : { transparent: true, opacity: p.kind === 'brow' ? 0.78 : 1, alphaTest: 0.05, depthWrite: false }), side: THREE.DoubleSide });
       } else if (p.kind === 'eye') {
@@ -976,7 +1014,7 @@ float armParam(vec3 p) {
       if (p.kind !== 'shoes') headParts.push(mesh);
       if (p.kind === 'hair') {
         // 머리카락 끝(반투명한 가닥)은 섞어 그려 앞머리 끝이 톱니처럼 잘리지 않고 가늘게 흩어지게
-        const soft = new THREE.Mesh(g, Object.assign(mat.clone(), { alphaTest: 0.04, transparent: true, depthWrite: false, alphaToCoverage: false }));
+        const soft = new THREE.Mesh(g, fringe(Object.assign(mat.clone(), { alphaTest: 0.04, transparent: true, depthWrite: false, alphaToCoverage: false })));
         soft.userData.kind = 'hair'; soft.renderOrder = 3; soft.receiveShadow = true;
         scene.add(soft); headParts.push(soft);
         // 털 껍질: 머리카락 겉에 가닥 무늬로 듬성듬성 뚫린 얇은 막을 몇 겹 씌워 윤곽이 매끈한 덩어리(헬멧)가 아니라 보송하게
@@ -988,7 +1026,7 @@ float armParam(vec3 p) {
             const gk = g.clone(), pk = gk.attributes.position.array;
             for (let i = 0; i < pk.length; i++) pk[i] = pos[i] + nor[i] * off;
             gk.attributes.position.needsUpdate = true;
-            const mk = Object.assign(mat.clone(), { alphaMap: strandTex(), alphaTest: 0.3 + 0.12 * k, transparent: false, alphaToCoverage: true });
+            const mk = fringe(Object.assign(mat.clone(), { alphaMap: strandTex(), alphaTest: 0.3 + 0.12 * k, transparent: false, alphaToCoverage: true }));
             mk.color = mat.color.clone().multiplyScalar(1 + 0.08 * k); // 바깥 가닥이 빛을 조금 더 받는다
             const sh = new THREE.Mesh(gk, mk);
             sh.userData.kind = 'hair'; sh.renderOrder = 1; sh.receiveShadow = true;
