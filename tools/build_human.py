@@ -372,6 +372,11 @@ def even_skin(src, dst):
     # 입술 사이 틈이 검게 벌어져 보이지 않게: 입술 안 어두운 곳을 입술색의 70%까지 올린다
     floor_ = rose * 0.62
     out = out * (1 - lip) + np.maximum(out, floor_) * lip
+    # 입 안 조각(입술 안쪽·잇몸·혀): 피부색으로 펴면 다문 입술 사이가 밝은 줄로 보인다 → 원래 색을 어둡게 되돌린다
+    mouth = np.zeros((H, W), bool)
+    mouth[720:940, 0:290] = True; mouth[1740:, 1540:1990] = True
+    mouth &= m > 0
+    out[mouth] = a[mouth] * 0.45
     Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), quality=88, optimize=True)
 
 def dark_iris(src, dst, size):
@@ -461,8 +466,9 @@ def cloth_part(name, want):
     keep = []
     for fv in fs:
         u = np.mean([ts[ti][0] for _, ti in fv]); v = np.mean([ts[ti][1] for _, ti in fv])
-        y = np.mean([vs[vi][1] for vi, _ in fv])
-        isPants = v < 0.58 and (u < 0.7 or y < 0)  # 바지 바깥 가장자리는 u가 0.7을 조금 넘는다(긴팔 소매 조각과는 높이로 구분)
+        y = np.mean([vs[vi][1] for vi, _ in fv]); ax = abs(np.mean([vs[vi][0] for vi, _ in fv]))
+        # 바지 지퍼 덮개·바깥 가장자리 조각은 u가 0.7을 넘는다(긴팔 소매 조각과는 위치로 구분: 소매는 몸 바깥·높은 곳)
+        isPants = v < 0.58 and (u < 0.7 or (ax < 2.0 and y < 1.7))
         if (want == 'pants') == isPants: keep.append(fv)
     r, ruv, tris = split(keep, ts)
     return {'scale': sc, 'ref': ref, 'split': r, 'uv': ruv, 'tris': tris, 'cover': sorted(set(dele))}

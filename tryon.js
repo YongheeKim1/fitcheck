@@ -385,7 +385,7 @@ async function dressAvatar3D(photo, opts) {
   if (typeof Avatar3D === 'undefined' || !Avatar3D.dress) return;
   const token = (tryon.dressToken = (tryon.dressToken || 0) + 1);
   try {
-    const item = { g: opts.g, color: opts.texture?.avgColor || opts.color, stretch: opts.stretch };
+    const item = { g: opts.g, color: (opts.texture && Avatar3D.garmentColor(opts.texture.texture)) || opts.texture?.avgColor || opts.color, stretch: opts.stretch }; // 상품 사진 가운데의 옷 색(살·배경 빼고)
     const cv = await Avatar3D.dress(photo, opts.category === 'top' ? { top: item } : { bottom: item });
     if (!cv || token !== tryon.dressToken || tryon.photo !== photo) return;
     const c = document.createElement('canvas');
