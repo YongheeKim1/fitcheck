@@ -367,6 +367,7 @@ function renderTryonPhoto() {
   const res = GarmentRender.draw(ctx, opts);
   if (scene && aiEnabled() && !scene.isAvatar) aiFillHole(tryon.photo); // 드러난 자리가 있으면 AI로 메운 뒤 다시 그린다
   $('#tryon-view').replaceChildren(c);
+  if (res.ok && tryon.photo.is3D) dressAvatar3D(tryon.photo, opts); // 3D 아바타: 옷도 3D 메시로 다시 입혀 바꿔 보여 준다
   const notes = res.ok ? [...res.notes, bodySourceNote(opts.category)] : res.notes;
   if (tryon.photo.isAvatar) notes.push(Avatar.sourceNote(tryon.photo.measures));
   $('#tryon-notes').innerHTML = notes.map((n) => `<li>${esc(n)}</li>`).join('');
@@ -376,6 +377,24 @@ function renderTryonPhoto() {
   if (advice) tryonStatus(esc(advice), 'warn');
   else tryonStatus(tryon.photo === tryon.refPhoto ? '저장해 둔 기준 사진으로 입혀 봤어요.' : '');
   updateRefUI();
+}
+
+// 3D 아바타에 옷을 3D로 입히기(avatar3d.js dress): 사진을 휘어 붙인 그림을 먼저 보여 주고, 3D가 그려지면 바꾼다.
+// 사이즈 안내 문장은 위의 GarmentRender 결과를 그대로 쓴다
+async function dressAvatar3D(photo, opts) {
+  if (typeof Avatar3D === 'undefined' || !Avatar3D.dress) return;
+  const token = (tryon.dressToken = (tryon.dressToken || 0) + 1);
+  try {
+    const item = { g: opts.g, color: opts.texture?.avgColor || opts.color, stretch: opts.stretch };
+    const cv = await Avatar3D.dress(photo, opts.category === 'top' ? { top: item } : { bottom: item });
+    if (!cv || token !== tryon.dressToken || tryon.photo !== photo) return;
+    const c = document.createElement('canvas');
+    c.width = cv.width; c.height = cv.height; c.className = 'analysis-canvas';
+    c.getContext('2d').drawImage(cv, 0, 0);
+    $('#tryon-view').replaceChildren(c);
+  } catch (err) {
+    console.error('3D 옷을 입히지 못해 사진 방식으로 보여 줘요', err);
+  }
 }
 
 // 내 아바타(avatar.js): 치수로 그린 몸을 "사진"처럼 쓴다. 치수가 바뀌면 다시 그린다

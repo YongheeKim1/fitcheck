@@ -309,6 +309,20 @@ async function runOutfit() {
       if (scene) scene = markDrawn(scene, GarmentRender.lastGarment(), W, H);
     }
     $('#outfit-view').replaceChildren(c);
+    if (model.is3D && typeof Avatar3D !== 'undefined' && Avatar3D.dress) {
+      // 3D 아바타: 옷을 3D 메시로 다시 입혀 바꿔 보여 준다(사이즈 안내 문장은 위 결과 그대로)
+      const spec = {};
+      if (top) spec.top = { g: itemRow(top), color: cuts.top?.avgColor || DEFAULT_COLOR.top, stretch: top.stretch };
+      if (bottom) spec.bottom = { g: itemRow(bottom), color: cuts.bottom?.avgColor || DEFAULT_COLOR.bottom, stretch: bottom.stretch };
+      const token = (wardrobe.dressToken = (wardrobe.dressToken || 0) + 1);
+      Avatar3D.dress(model, spec).then((cv) => {
+        if (!cv || token !== wardrobe.dressToken) return;
+        const c3 = document.createElement('canvas');
+        c3.width = cv.width; c3.height = cv.height;
+        c3.getContext('2d').drawImage(cv, 0, 0);
+        $('#outfit-view').replaceChildren(c3);
+      }).catch((err) => console.error('3D 옷을 입히지 못해 사진 방식으로 보여 줘요', err));
+    }
     if (tuckIn && top && bottom && !tuck) notes.push('상의가 짧아서 바지 허리까지 오지 않아요(넣어 입을 필요가 없는 기장이에요).');
     $('#outfit-notes').innerHTML = notes.map((n) => `<li>${esc(n)}</li>`).join('');
     renderOutfitColor(top && cuts.top?.avgColor, bottom && cuts.bottom?.avgColor);

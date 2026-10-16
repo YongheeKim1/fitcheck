@@ -480,6 +480,252 @@ const Avatar3D = (() => {
 
   const hexRGB = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
 
+  // ---------- 3D 옷(아바타 전용): MakeHuman 옷 메시를 몸에 붙여 사이즈표대로 넓히고 자른다 ----------
+  // 팔 위치 판정(원래 A자세 좌표): 어깨 관절보다 바깥이면 어깨 관절에서 손목 쪽으로 잰 거리(cm), 아니면 -1
+  const CLOTH_GLSL = `
+uniform vec3 uShL, uShR, uAxL, uAxR;
+uniform float uTopOn, uBotOn, uHem, uSleeve, uWaist, uPHem, uHemM, uSleeveM, uWaistM, uPHemM;
+float armParam(vec3 p) {
+  vec3 sh = p.x > 0.0 ? uShL : uShR;
+  vec3 ax = p.x > 0.0 ? uAxL : uAxR;
+  if (abs(p.x) < abs(sh.x) - 1.0) return -1.0;
+  float t = dot(p - sh, ax);
+  if (length(p - sh - ax * t) > 9.0 && t > 0.0) return -1.0; // 팔 축에서 먼 곳(골반 옆 등)은 팔이 아니다
+  return max(0.0, t);
+}
+`;
+  function clothArmUniforms(cmP) {
+    const u = {};
+    for (const sd of ['L', 'R']) {
+      const sh = jpos(cmP, `upperarm01.${sd}____head`), wr = jpos(cmP, `wrist.${sd}____head`);
+      const ax = nrm3(sub3(wr, sh));
+      u['uSh' + sd] = { value: new THREE.Vector3(...sh) };
+      u['uAx' + sd] = { value: new THREE.Vector3(...ax) };
+    }
+    return u;
+  }
+
+  let cloth = null, clothLoading = null;
+  async function loadCloth() {
+    if (cloth) return cloth;
+    if (clothLoading) return clothLoading;
+    clothLoading = (async () => {
+      const B = BASE + 'cloth/';
+      const [meta, bin] = await Promise.all([fetch(B + 'cloth.json').then((r) => r.json()), fetch(B + 'cloth.bin').then((r) => r.arrayBuffer())]);
+      const T = { float32: Float32Array, uint32: Uint32Array, uint16: Uint16Array };
+      const arr = (name) => { const a = meta.arrays[name]; return new T[a.type](bin, a.offset, a.count); };
+      const loader = new THREE.TextureLoader();
+      const tex = {};
+      await Promise.all(['tee_ao.jpg', 'longtee_ao.jpg', 'jeans_d.jpg', 'jeans_n.jpg'].map((n) => new Promise((res, rej) => loader.load(B + n, (t) => { if (!n.endsWith('_n.jpg')) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; tex[n] = t; res(); }, undefined, rej))));
+      const items = {};
+      for (const c of meta.cloth) {
+        items[c.name] = { name: c.name, scale: c.scale, vi: arr(`c.${c.name}.vi`), pw: arr(`c.${c.name}.w`), ref: arr(`c.${c.name}.ref`), uv: arr(`c.${c.name}.uv`), tris: arr(`c.${c.name}.tris`), cover: arr(`c.${c.name}.cover`) };
+      }
+      cloth = { items, tex };
+      return cloth;
+    })();
+    try { return await clothLoading; } finally { clothLoading = null; }
+  }
+
+  const hexToLin = (hex) => new THREE.Color(...hexRGB(hex || '#808080').map((v) => v / 255)).convertSRGBToLinear();
+
+  // 옷 메시 하나 만들기: it(옷 데이터), P(자세 잡은 몸), cmP(원래 자세 몸), ease(정점별 넓힐 cm를 돌려주는 함수)
+  // extendTo: 몸판 밑단을 이 높이(원래 자세 y, cm)까지 늘린다(사이즈표 총장이 옷 메시보다 길 때)
+  function clothMesh(it, P, cmP, ease, mat, extendTo) {
+    const PP = proxyPos({ ...it, scale: it.scale }, P);
+    const R = proxyPos({ ...it, scale: it.scale }, cmP);
+    const n = PP.length / 3, t = it.tris, ref = it.ref;
+    const used = new Uint8Array(n); for (let j = 0; j < ref.length; j++) used[ref[j]] = 1; // 이 옷 조각이 쓰는 정점만(같은 원본의 다른 옷 정점 빼기)
+    // 메시가 덮는 범위(원래 자세): 몸 숨기기를 이 안으로만
+    let yMin = Infinity, yMax = -Infinity, sMax = 0;
+    const isArm = new Int8Array(n);
+    for (let i = 0; i < n; i++) {
+      if (!used[i]) continue;
+      const aS = armParamJS(cmP, R[i * 3], R[i * 3 + 1], R[i * 3 + 2]);
+      if (aS >= 0) { isArm[i] = 1; sMax = Math.max(sMax, aS); } else { yMin = Math.min(yMin, R[i * 3 + 1]); yMax = Math.max(yMax, R[i * 3 + 1]); }
+    }
+    // 겹치지 않은 정점 기준 법선(이음매가 벌어지지 않게)
+    const Nn = new Float32Array(n * 3);
+    for (let k = 0; k < t.length; k += 3) {
+      const a = ref[t[k]] * 3, b = ref[t[k + 1]] * 3, c = ref[t[k + 2]] * 3;
+      const ux = PP[b] - PP[a], uy = PP[b + 1] - PP[a + 1], uz = PP[b + 2] - PP[a + 2];
+      const vx = PP[c] - PP[a], vy = PP[c + 1] - PP[a + 1], vz = PP[c + 2] - PP[a + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      for (const i of [a, b, c]) { Nn[i] += nx; Nn[i + 1] += ny; Nn[i + 2] += nz; }
+    }
+    // 몸판 밑단 높이: 아래쪽 몇 개 튀는 정점 대신 아래에서 5% 지점
+    {
+      const ys = [];
+      for (let i = 0; i < n; i++) if (used[i] && !isArm[i]) ys.push(R[i * 3 + 1]);
+      ys.sort((a, b) => a - b);
+      if (ys.length) yMin = ys[Math.floor(ys.length * 0.05)];
+    }
+    // 긴 기장: 허리 아래 몸판을 아래로 고르게 늘린다(밑단 쪽일수록 많이)
+    const drop = extendTo != null && extendTo < yMin ? yMin - extendTo : 0;
+    const y0 = yMin + 18;
+    for (let i = 0; i < n; i++) {
+      if (!used[i]) continue;
+      const l = Math.hypot(Nn[i * 3], Nn[i * 3 + 1], Nn[i * 3 + 2]) || 1;
+      const e = ease(R[i * 3], R[i * 3 + 1], R[i * 3 + 2]);
+      for (let k = 0; k < 3; k++) PP[i * 3 + k] += (Nn[i * 3 + k] / l) * e;
+      if (drop && !isArm[i] && R[i * 3 + 1] < y0) {
+        const d = drop * (y0 - R[i * 3 + 1]) / (y0 - yMin);
+        PP[i * 3 + 1] -= d; R[i * 3 + 1] -= d;
+      }
+    }
+    const g = geom(ref, it.uv, t, PP, null);
+    const rest = new Float32Array(ref.length * 3);
+    for (let i = 0; i < ref.length; i++) for (let k = 0; k < 3; k++) rest[i * 3 + k] = R[ref[i] * 3 + k];
+    g.setAttribute('restPos', new THREE.BufferAttribute(rest, 3));
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.castShadow = mesh.receiveShadow = true;
+    mesh.userData.ext = { yMin: yMin - drop, yMax, sMax };
+    mesh.userData.rest = R; mesh.userData.used = used;
+    return mesh;
+  }
+
+  // 옷 재질: 사이즈표 길이로 자르기(원래 자세 좌표로 판정) + 3D 조명
+  function clothMaterial(kind, opts, U) {
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: hexToLin(opts.color), side: THREE.DoubleSide, roughness: kind === 'bottom' ? 0.82 : 0.9,
+      sheen: kind === 'bottom' ? 0.15 : 0.6, sheenRoughness: 0.7, sheenColor: hexToLin(opts.color).multiplyScalar(0.6).addScalar(0.15),
+      ...(opts.map ? { map: opts.map } : {}), ...(opts.normalMap ? { normalMap: opts.normalMap, normalScale: new THREE.Vector2(0.8, 0.8) } : {}),
+    });
+    mat.customProgramCacheKey = () => 'cloth-' + kind; // 상의·바지는 자르는 식이 달라 셰이더를 따로
+    mat.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, U);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nvarying vec3 vRest;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\n' + CLOTH_GLSL)
+        .replace('#include <clipping_planes_fragment>', kind === 'top' ? `#include <clipping_planes_fragment>
+          { float aS = armParam(vRest); if (aS >= 0.0 ? aS > uSleeve : vRest.y < uHem) discard; }` : `#include <clipping_planes_fragment>
+          if (vRest.y > uWaist || vRest.y < uPHem) discard;`)
+        // 안쪽 면(밑단·소매 안으로 보이는 곳)은 어둡게
+        .replace('#include <map_fragment>', '#include <map_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= ' + (kind === 'top' ? '0.45' : '0.8') + ';'); // 바지는 앞 지퍼 쪽 겹친 천 사이로 안쪽이 보여 덜 어둡게
+    };
+    return mat;
+  }
+
+  // 아바타에 3D 옷 입히기. photo: build() 결과, outfit: { top?: { g, color, stretch }, bottom?: { g, color, stretch } }
+  // 돌려주는 것: 옷 입은 아바타 캔버스(같은 640x1280, 얼굴·배경 포함)
+  async function dress(photo, outfit) {
+    const X = photo?._3d;
+    if (!X) return null;
+    const key = JSON.stringify(outfit);
+    if (X.cache.has(key)) return X.cache.get(key);
+    const C = await loadCloth();
+    const { scene, body, briefU: U, P, cmP, m, crotchY } = X;
+    const meshes = [];
+    const cov = body.geometry.attributes.aCov, ca = cov.array;
+    ca.fill(0);
+    // 옷 밑 몸 숨기기: 덮는 목록에 있고, 몸 자리가 옷이 남는 범위 안(keep)이며, 3.5cm 안에 남은 옷 정점이 있을 때만
+    const bodyIdx = (list, slot, mesh, keep) => {
+      const R = mesh.userData.rest, used = mesh.userData.used, C2 = 3.5, cells = new Map(), kk = (a, b, c) => a + ',' + b + ',' + c;
+      for (let i = 0; i < R.length / 3; i++) {
+        if (!used[i] || !keep(R[i * 3], R[i * 3 + 1], R[i * 3 + 2], 0)) continue;
+        const key = kk(Math.floor(R[i * 3] / C2), Math.floor(R[i * 3 + 1] / C2), Math.floor(R[i * 3 + 2] / C2));
+        let a = cells.get(key); if (!a) cells.set(key, (a = [])); a.push(i);
+      }
+      const set = new Uint8Array(P.length / 3);
+      for (const i of list) {
+        const x = cmP[i * 3], y = cmP[i * 3 + 1], z = cmP[i * 3 + 2];
+        if (!keep(x, y, z, 1.5)) continue;
+        const cx = Math.floor(x / C2), cy = Math.floor(y / C2), cz = Math.floor(z / C2);
+        let hit = false;
+        for (let a = -1; a <= 1 && !hit; a++) for (let b = -1; b <= 1 && !hit; b++) for (let c = -1; c <= 1 && !hit; c++) {
+          const L = cells.get(kk(cx + a, cy + b, cz + c)); if (!L) continue;
+          for (const j of L) { const dx = R[j * 3] - x, dy = R[j * 3 + 1] - y, dz = R[j * 3 + 2] - z; if (dx * dx + dy * dy + dz * dz < C2 * C2) { hit = true; break; } }
+        }
+        if (hit) set[i] = 1;
+      }
+      const ref = data.body.ref;
+      for (let j = 0; j < ref.length; j++) if (set[ref[j]]) ca[j * 2 + slot] = 1;
+    };
+    const give = (st) => 1 + ({ none: 0, some: 0.04, lots: 0.08 }[st] ?? 0);
+    const neckY = jpos(cmP, 'neck01____head')[1];
+    const TAU = Math.PI * 2;
+    U.uTopOn.value = 0; U.uBotOn.value = 0;
+    if (outfit.top?.g) {
+      const g = outfit.top.g;
+      const it = C.items[g.sleeve != null && g.sleeve > 40 ? 'longtee' : 'tee'];
+      const hps = neckY + 1; // 옷깃 옆 어깨 꼭대기(목 밑)
+      U.uHem.value = hps - (g.length ?? 70);
+      U.uSleeve.value = g.sleeve != null ? g.sleeve + 2 : 100;
+      U.uTopOn.value = 1;
+      // 넓히기: 가슴 둘레 여유(옷 - 몸)를 반지름으로(원래 옷 메시가 가진 여유 약 1.2cm는 뺀다). 목 근처는 넓히지 않는다
+      const chestE = Math.max(-0.4, Math.min(9, ((g.chest ? 2 * g.chest * give(outfit.top.stretch) : m.chest + 8) - m.chest) / TAU - 1.2));
+      const ease = (x, y, z) => {
+        const aS = armParamJS(X.cmP, x, y, z);
+        const f = Math.min(1, Math.max(0, (neckY - 2 - y) / 10));
+        return aS >= 0 ? chestE * 0.45 * Math.max(0, 1 - aS / 40) * f : chestE * f;
+      };
+      const mat = clothMaterial('top', { color: outfit.top.color, map: C.tex[it.name + '_ao.jpg'] }, U);
+      const mesh = clothMesh(it, P, cmP, ease, mat, U.uHem.value);
+      U.uHemM.value = mesh.userData.ext.yMin; U.uSleeveM.value = mesh.userData.ext.sMax;
+      meshes.push(mesh);
+      const sl = Math.min(U.uSleeve.value, U.uSleeveM.value), hem = Math.max(U.uHem.value, U.uHemM.value);
+      bodyIdx(it.cover, 0, mesh, (x, y, z, mg) => { const aS = armParamJS(cmP, x, y, z); return aS >= 0 ? aS <= sl - mg : y >= hem + mg; });
+    }
+    if (outfit.bottom?.g) {
+      const g = outfit.bottom.g;
+      const it = C.items.jeans;
+      const waist = crotchY + (g.rise ?? 27);
+      U.uWaist.value = waist;
+      U.uPHem.value = Math.max(2.5, waist - (g.length ?? 100));
+      U.uBotOn.value = 1;
+      const wE = Math.max(-0.4, ((g.waist ? 2 * g.waist * give(outfit.bottom.stretch) : m.waist) - m.waist) / TAU - 0.8);
+      const tE = Math.max(-0.3, ((g.thigh ? 2 * g.thigh * give(outfit.bottom.stretch) : m.thigh + 6) - m.thigh) / TAU - 0.8);
+      const hE = Math.max(-0.3, ((g.hem ? 2 * g.hem : 40) - 26) / TAU - 1.6);
+      const ankleY = 8;
+      const ease = (x, y) => {
+        if (y > crotchY + 3) return wE; // 허리~엉덩이
+        const tt = Math.min(1, Math.max(0, (crotchY - y) / (crotchY - ankleY)));
+        const blend = Math.min(1, Math.max(0, (crotchY + 3 - y) / 6));
+        return wE * (1 - blend) + (tE * (1 - tt) + hE * tt) * blend;
+      };
+      const mat = clothMaterial('bottom', { color: outfit.bottom.color, map: C.tex['jeans_d.jpg'], normalMap: C.tex['jeans_n.jpg'] }, U);
+      const mesh = clothMesh(it, P, cmP, ease, mat);
+      U.uWaistM.value = mesh.userData.ext.yMax; U.uPHemM.value = mesh.userData.ext.yMin;
+      // 앞 가운데 허리선(지퍼 위)이 뒤보다 낮다: 그보다 위로 자르면 바지 안쪽(뒤판 안감)이 비친다
+      {
+        const R = mesh.userData.rest, used = mesh.userData.used;
+        let front = -Infinity;
+        for (let i = 0; i < R.length / 3; i++) if (used[i] && R[i * 3 + 2] > 0 && Math.abs(R[i * 3]) < 3 && R[i * 3 + 1] > crotchY) front = Math.max(front, R[i * 3 + 1]);
+        if (front > crotchY) U.uWaist.value = Math.min(U.uWaist.value, front - 0.3);
+      }
+      meshes.push(mesh);
+      const wt = Math.min(U.uWaist.value, U.uWaistM.value), ph = Math.max(U.uPHem.value, U.uPHemM.value);
+      // 바지는 덮는 목록 + 팔·손이 아닌 몸 전부(앞 지퍼 쪽 살·속옷이 바지를 뚫고 나오지 않게)
+      const cand = new Set(it.cover), wa = data.w.armL, wb = data.w.armR;
+      for (let i = 0; i < wa.length; i++) if (wa[i] + wb[i] < 40) cand.add(i);
+      bodyIdx(cand, 1, mesh, (x, y, z, mg) => y <= wt - mg * 0.3 && y >= ph + mg);
+    }
+    cov.needsUpdate = true;
+    meshes.forEach((o) => scene.add(o));
+    // 다른 패스에서 꺼 둔 조명을 켜고 같은 설정으로 그린다
+    scene.children.filter((o) => o.isLight).forEach((l) => { l.visible = true; });
+    renderer.setPixelRatio(1); renderer.setSize(CW * SS, CH * SS, false);
+    scene.environment = studioEnv; scene.environmentIntensity = LIGHT.env;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = LIGHT.exposure;
+    const full = X.shot();
+    meshes.forEach((o) => { scene.remove(o); o.geometry.dispose(); o.material.dispose(); });
+    U.uTopOn.value = 0; U.uBotOn.value = 0; ca.fill(0); cov.needsUpdate = true;
+    if (X.facePaste && X.face?.img) full.getContext('2d').drawImage(X.face.img, X.facePaste.x, X.facePaste.y, X.face.img.width * X.facePaste.k, X.face.img.height * X.facePaste.k);
+    const canvas = X.backdrop(full);
+    if (X.cache.size > 12) X.cache.clear();
+    X.cache.set(key, canvas);
+    return canvas;
+  }
+  function armParamJS(cmP, x, y, z) {
+    const sd = x > 0 ? 'L' : 'R';
+    const sh = jpos(cmP, `upperarm01.${sd}____head`);
+    if (Math.abs(x) < Math.abs(sh[0]) - 1) return -1;
+    const ax = nrm3(sub3(jpos(cmP, `wrist.${sd}____head`), sh));
+    const t = (x - sh[0]) * ax[0] + (y - sh[1]) * ax[1] + (z - sh[2]) * ax[2];
+    if (t > 0 && Math.hypot(x - sh[0] - ax[0] * t, y - sh[1] - ax[1] * t, z - sh[2] - ax[2] * t) > 9) return -1;
+    return Math.max(0, t);
+  }
+
   // ---------- 아바타 만들기 ----------
   // face(선택): avatar.js makeFace() 결과 { img, chinY, centerX, faceW, skin } — 내 사진에서 오린 얼굴·머리카락
   async function build(state, analysis, pc, face) {
@@ -546,11 +792,19 @@ const Avatar3D = (() => {
     let crotchY = -Infinity;
     for (const i of data.meta.crotch) if (Math.abs(cmP[i * 3]) < 1) crotchY = Math.max(crotchY, cmP[i * 3 + 1]);
     const briefU = { uTop: { value: hipY + 7.5 }, uBot: { value: crotchY - 7 }, uHalf: { value: GarmentRender.visW(m.hip, 'hip') / 2 + 4 }, uCav: { value: POSE.cav } };
+    // 3D 옷을 입혔을 때 옷 밑 몸 숨기기(dress()가 값을 바꾼다): 덮는 정점(aCov)이면서 옷이 남은 자리
+    Object.assign(briefU, { uTopOn: { value: 0 }, uBotOn: { value: 0 }, uHem: { value: -1e3 }, uSleeve: { value: -1 }, uWaist: { value: -1e3 }, uPHem: { value: 1e3 }, uHemM: { value: -1e3 }, uSleeveM: { value: 100 }, uWaistM: { value: 1e3 }, uPHemM: { value: -1e3 }, ...clothArmUniforms(cmP) });
+    body.geometry.setAttribute('aCov', new THREE.BufferAttribute(new Float32Array(data.body.ref.length * 2), 2));
     skinMat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, briefU);
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nattribute float cav;\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;\nvCav = cav;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nuniform float uTop, uBot, uHalf, uCav;\nfloat briefM;')
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nattribute float cav;\nattribute vec2 aCov;\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;\nvCav = cav;\nvCov = aCov;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nfloat briefM;\n' + CLOTH_GLSL)
+        .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+          {
+            if (uTopOn > 0.5 && vCov.x > 0.99) discard;
+            if (uBotOn > 0.5 && vCov.y > 0.99) discard;
+          }`)
         .replace('#include <map_fragment>', `#include <map_fragment>
           diffuseColor.rgb *= (1.0 - 0.4 * vHairOcc) * (1.0 - uCav * vCav) ; // 앞머리 아래 그늘 · 오목한 곳 그늘(따뜻한 쪽으로)
           diffuseColor.r += uCav * vCav * 0.04;
@@ -811,6 +1065,7 @@ const Avatar3D = (() => {
     }
 
     // 바탕(스튜디오 회색 그라데이션 + 발밑 그림자) 위에 합치기
+    const backdrop = (full) => {
     const canvas = document.createElement('canvas'); canvas.width = CW; canvas.height = CH;
     const c = canvas.getContext('2d');
     const bg = c.createLinearGradient(0, 0, 0, CH); bg.addColorStop(0, '#f2f0ed'); bg.addColorStop(1, '#dedad4');
@@ -824,6 +1079,11 @@ const Avatar3D = (() => {
     fl.addColorStop(0, 'rgba(0,0,0,0.28)'); fl.addColorStop(1, 'rgba(0,0,0,0)');
     c.save(); c.translate(cx, fy); c.scale(1, 0.13); c.translate(-cx, -fy); c.fillStyle = fl; c.beginPath(); c.arc(cx, fy, rr, 0, Math.PI * 2); c.fill(); c.restore();
     c.drawImage(full, 0, 0);
+    return canvas;
+    };
+    const canvas = backdrop(full);
+    const c = canvas.getContext('2d');
+    const cx = CW / 2;
 
     // 분할 지도(반 해상도)
     const sw = CW / 2, sh = CH / 2;
@@ -893,10 +1153,13 @@ const Avatar3D = (() => {
       isAvatar: true,
       depthShade: shadeMap, // 3D 조명에서 얻은 옷 명암(AI 깊이 추정 대신)
     };
-    return { canvas, pose: lm, pxPerCm: s, scene: sceneOut, poseCheck: { ok: true, issues: [] }, isAvatar: true, is3D: true, measures: m, fitted: meas, hasFace: !!face?.img };
+    const out = { canvas, pose: lm, pxPerCm: s, scene: sceneOut, poseCheck: { ok: true, issues: [] }, isAvatar: true, is3D: true, measures: m, fitted: meas, hasFace: !!face?.img };
+    // 3D 옷 입히기(dress)에 쓸 장면 정보(열거되지 않게)
+    Object.defineProperty(out, '_3d', { value: { scene, cam, body, briefU, P, cmP, s, face, facePaste, shot, backdrop, crotchY, hipY, m, cache: new Map() } });
+    return out;
   }
 
-  return { load, build, fit, measure, morph, HAND_CURL, POSE, FACE, LIGHT };
+  return { load, build, dress, fit, measure, morph, HAND_CURL, POSE, FACE, LIGHT };
 })();
 
 // 내 체형 탭의 아바타 카드를 3D로 바꿔 그리기(첫 화면을 막지 않게 한가할 때)

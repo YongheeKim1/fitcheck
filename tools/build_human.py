@@ -450,3 +450,55 @@ def clean_shoes(src, dst, size):
     Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), quality=88, optimize=True)
 clean_shoes('shoes05_diffuse.png', 'shoes.jpg', 1024)
 for f in sorted(os.listdir(OUT)): print(f, os.path.getsize(os.path.join(OUT, f)))
+
+
+# ---------- 3D 옷(아바타 전용, 따로 받는 cloth.json + cloth.bin): MakeHuman 시스템 옷(CC0)에서 상의·바지만 떼어 낸다 ----------
+# male_casualsuit04: 반팔 티 + 청바지, male_casualsuit02: 긴팔 티(+ 같은 청바지). 한 메시라 UV 위치로 나눈다(바지 = 왼쪽 아래).
+def cloth_part(name, want):
+    if not os.path.exists(P(name + '.mhclo')): return None
+    sc, ref, dele, ts, fs = load_clo(name)
+    vs = load_obj(P(name + '.obj'))[0]
+    keep = []
+    for fv in fs:
+        u = np.mean([ts[ti][0] for _, ti in fv]); v = np.mean([ts[ti][1] for _, ti in fv])
+        y = np.mean([vs[vi][1] for vi, _ in fv])
+        isPants = v < 0.58 and (u < 0.7 or y < 0)  # 바지 바깥 가장자리는 u가 0.7을 조금 넘는다(긴팔 소매 조각과는 높이로 구분)
+        if (want == 'pants') == isPants: keep.append(fv)
+    r, ruv, tris = split(keep, ts)
+    return {'scale': sc, 'ref': ref, 'split': r, 'uv': ruv, 'tris': tris, 'cover': sorted(set(dele))}
+
+CLOTH = [('tee', 'male_casualsuit04', 'top'), ('longtee', 'male_casualsuit02', 'top'), ('jeans', 'male_casualsuit04', 'pants')]
+parts = [(nm, cloth_part(src, 'pants' if w == 'pants' else 'top'), src) for nm, src, w in CLOTH]
+if all(c for _, c, _ in parts):
+    cbuf = bytearray(); cmeta = {'arrays': {}, 'cloth': []}
+    def cput(name, arr, dtype):
+        a = np.ascontiguousarray(arr, dtype=dtype)
+        while len(cbuf) % 4: cbuf.append(0)
+        cmeta['arrays'][name] = {'offset': len(cbuf), 'count': int(a.size), 'type': np.dtype(dtype).name}
+        cbuf.extend(a.tobytes())
+    for nm, c, src in parts:
+        ref = np.array(c['ref'])
+        cput('c.%s.vi' % nm, ref[:, :3].astype(np.uint16).ravel(), np.uint16)
+        cput('c.%s.w' % nm, ref[:, 3:9].astype(np.float32).ravel(), np.float32)
+        cput('c.%s.ref' % nm, c['split'], np.uint32)
+        cput('c.%s.uv' % nm, c['uv'].ravel(), np.float32)
+        cput('c.%s.tris' % nm, c['tris'], np.uint32)
+        cput('c.%s.cover' % nm, np.array(c['cover'], np.uint16), np.uint16)
+        cmeta['cloth'].append({'name': nm, 'scale': c['scale'], 'src': src})
+    os.makedirs(os.path.join(OUT, 'cloth'), exist_ok=True)
+    open(os.path.join(OUT, 'cloth', 'cloth.bin'), 'wb').write(bytes(cbuf))
+    json.dump(cmeta, open(os.path.join(OUT, 'cloth', 'cloth.json'), 'w'), separators=(',', ':'))
+    # 옷 결 지도: 접힘 그늘(AO, 회색) / 청바지는 원래 무늬의 밝기 결 + 노멀맵
+    def gray_save(src, dst, size, q=85):
+        im = Image.open(P(src)).convert('L').resize((size, size), Image.LANCZOS)
+        im.save(os.path.join(OUT, 'cloth', dst), quality=q, optimize=True)
+    gray_save('male_casualsuit04_ao.png', 'tee_ao.jpg', 1024)
+    gray_save('male_casualsuit02_ao.png', 'longtee_ao.jpg', 1024)
+    from PIL import ImageFilter
+    im = Image.open(P('male_casualsuit04_diffuse.png')).convert('RGB').resize((1024, 1024), Image.LANCZOS)
+    a = np.asarray(im).astype(np.float32); l = a @ np.array([0.3, 0.5, 0.2], np.float32)
+    bl = np.asarray(Image.fromarray(np.clip(l, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(40))).astype(np.float32) + 1
+    det = np.clip(205 * (0.55 * (l / bl - 1) + 1) * (bl / bl[420:1000, 0:700].mean()) ** 0.35, 0, 255)  # 무늬는 남기고 전체 밝기 차이는 줄인다
+    Image.fromarray(det.astype(np.uint8)).save(os.path.join(OUT, 'cloth', 'jeans_d.jpg'), quality=85, optimize=True)
+    Image.open(P('male_casualsuit04_normal.png')).convert('RGB').resize((1024, 1024), Image.LANCZOS).save(os.path.join(OUT, 'cloth', 'jeans_n.jpg'), quality=88, optimize=True)
+    for f in sorted(os.listdir(os.path.join(OUT, 'cloth'))): print('cloth/' + f, os.path.getsize(os.path.join(OUT, 'cloth', f)))

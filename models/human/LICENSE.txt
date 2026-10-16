@@ -8,4 +8,6 @@ CC0 1.0 Universal(퍼블릭 도메인)로 공개되어 있습니다.
 
 - 얼굴 다듬기 타깃(mouth/chin/head/cheek/nose/eyebrows/neck/eyes): MakeHuman makehuman/data/targets (CC0, 2020년 명시 공개)
 
+- 3D 옷(cloth/: 반팔·긴팔 티, 청바지 메시와 접힘·데님 결 지도): MakeHuman 시스템 옷 clothes/male_casualsuit04, male_casualsuit02 (CC0, 위 bundled assets)
+
 변환 스크립트: tools/build_human.py
