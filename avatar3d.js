@@ -306,11 +306,11 @@ const Avatar3D = (() => {
   const FACE = {
     'lowerlip-vol': -0.7, 'lowerlip-h': -0.3, 'lowerlip-mid': 0.8, 'upperlip-mid': -0.6, 'mouth-angle': 0.3, 'mouth-w': -0.1,
     'chin-prom': 0.25, 'chin-w': -0.45, 'head-fat': -0.5, 'head-oval': 0,
-    'cheek-vol': -0.5, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
+    'cheek-vol': -0.6, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35 };
+  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35, lipClose: 0.2 };
   const HAND_CURL = { palmSign: -1, seg: [7, 16, 10], more: 0.8, close: 1, thumb: [0, 8, 8], thumbIn: -55, scale: 0.95 };
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
@@ -480,6 +480,22 @@ const Avatar3D = (() => {
 
   const hexRGB = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
 
+  // 입 다물기: 피부 UV에서 입술 자리(얼굴 조각이 90도 돌아 있어 윗입술은 왼쪽, 아랫입술은 오른쪽)를 찾아
+  // 입술 사이 선에 가까운 정점일수록 윗입술은 아래로, 아랫입술은 위로 옮긴다(cm)
+  function closeLips(P, amt) {
+    const ref = data.body.ref, uv = data.body.uv, done = new Uint8Array(P.length / 3);
+    const SX = 1862, CY = 1060, RX = 46, RY = 62;
+    for (let j = 0; j < ref.length; j++) {
+      const i = ref[j]; if (done[i]) continue;
+      const px = uv[j * 2] * 2048, py = (1 - uv[j * 2 + 1]) * 2048;
+      const e = ((px - SX) / RX) ** 2 + ((py - CY) / RY) ** 2;
+      if (e > 1) continue;
+      done[i] = 1;
+      const d = px - SX, w = Math.max(0, 1 - Math.abs(d) / 30) * (1 - e) ** 0.5;
+      P[i * 3 + 1] += (d < 0 ? -1 : 1) * amt * w;
+    }
+  }
+
   // ---------- 3D 옷(아바타 전용): MakeHuman 옷 메시를 몸에 붙여 사이즈표대로 넓히고 자른다 ----------
   // 팔 위치 판정(원래 A자세 좌표): 어깨 관절보다 바깥이면 어깨 관절에서 손목 쪽으로 잰 거리(cm), 아니면 -1
   const CLOTH_GLSL = `
@@ -539,7 +555,7 @@ float armParam(vec3 p) {
     }
     g.putImageData(im, 0, 0);
     knitT = new THREE.CanvasTexture(c);
-    knitT.wrapS = knitT.wrapT = THREE.RepeatWrapping; knitT.repeat.set(10, 10);
+    knitT.wrapS = knitT.wrapT = THREE.RepeatWrapping; knitT.repeat.set(36, 36); knitT.anisotropy = 8; // 촘촘하게(골지처럼 보이지 않게)
     return knitT;
   }
 
@@ -567,6 +583,16 @@ float armParam(vec3 p) {
     const med = (a) => { a.sort((p, q) => p - q); return a[a.length >> 1]; };
     const h = (v) => Math.round(v).toString(16).padStart(2, '0');
     return '#' + h(med(R)) + h(med(G)) + h(med(Bl));
+  }
+
+  // 옷 색: 아주 어두운 색은 무채색 쪽으로(검은 옷이 갈색으로 뜨지 않게), 밝기 바닥 0.07(데님 결이 보이게)
+  function clothColor(hex) {
+    const [r, g, b] = hexRGB(hex || '#808080').map((v) => v / 255);
+    let L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    let c = [r, g, b];
+    if (L < 0.22) { const t = Math.min(1, (1 - L / 0.22) * 1.3) * 0.9; c = c.map((v) => v * (1 - t) + L * t); }
+    if (L < 0.07) { const k = 0.07 / Math.max(0.005, L); c = c.map((v) => Math.min(1, v * k + (0.07 - L) * (L < 0.005 ? 1 : 0))); }
+    return new THREE.Color(c[0], c[1], c[2]).convertSRGBToLinear();
   }
 
   const hexToLin = (hex) => new THREE.Color(...hexRGB(hex || '#808080').map((v) => v / 255)).convertSRGBToLinear();
@@ -637,10 +663,10 @@ float armParam(vec3 p) {
   // 옷 재질: 사이즈표 길이로 자르기(원래 자세 좌표로 판정) + 3D 조명
   function clothMaterial(kind, opts, U) {
     const mat = new THREE.MeshPhysicalMaterial({
-      color: hexToLin(opts.color).multiplyScalar(kind === 'bottom' ? 1.25 : 1), side: THREE.DoubleSide, roughness: kind === 'bottom' ? 0.9 : 0.9, // 데님 결 지도 평균(약 0.8)만큼 밝혀 상품색에 맞춘다
-      sheen: kind === 'bottom' ? 0.15 : 0.6, sheenRoughness: 0.7, sheenColor: hexToLin(opts.color).multiplyScalar(0.6).addScalar(0.15),
+      color: clothColor(opts.color).multiplyScalar(kind === 'bottom' ? 1.25 : 1), side: THREE.DoubleSide, roughness: kind === 'bottom' ? 0.93 : 0.9, // 데님 결 지도 평균(약 0.8)만큼 밝혀 상품색에 맞춘다
+      sheen: kind === 'bottom' ? 0 : 0.5, sheenRoughness: 0.7, sheenColor: clothColor(opts.color).multiplyScalar(0.6).addScalar(0.12),
       ...(opts.map ? { map: opts.map } : {}), ...(opts.normalMap ? { normalMap: opts.normalMap, normalScale: new THREE.Vector2(0.8, 0.8) } : {}),
-      ...(opts.bump ? { bumpMap: opts.bump, bumpScale: 0.9 } : {}),
+      ...(opts.bump ? { bumpMap: opts.bump, bumpScale: 0.25 } : {}),
     });
     mat.customProgramCacheKey = () => 'cloth-' + kind; // 상의·바지는 자르는 식이 달라 셰이더를 따로
     mat.onBeforeCompile = (sh) => {
@@ -657,7 +683,7 @@ float armParam(vec3 p) {
           float edgeD = min(uWaist - vRest.y, vRest.y - uPHem);`)
         // 안쪽 면(밑단·소매 안으로 보이는 곳)은 어둡게
         .replace('#include <map_fragment>', '#include <map_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= ' + (kind === 'top' ? '0.45' : '0.8') + ';' // 바지는 앞 지퍼 쪽 겹친 천 사이로 안쪽이 보여 덜 어둡게
-          + '\ndiffuseColor.rgb *= mix(0.88, 1.0, smoothstep(0.4, 1.6, edgeD));'); // 밑단·소매 끝 접어 박은 단(조금 어둡게)
+          + '\ndiffuseColor.rgb *= mix(0.82, 1.0, smoothstep(1.2, 1.5, edgeD));'); // 밑단·소매 끝 접어 박은 단(1.2~1.5cm, 18% 어둡게)
     };
     return mat;
   }
@@ -714,7 +740,7 @@ float armParam(vec3 p) {
         const aS = armParamJS(X.cmP, x, y, z);
         const f = Math.min(1, Math.max(0, (neckY - 2 - y) / 10));
         // 소매는 몸통 여유를 거의 받지 않는다(진동에서 6cm 안에 서서히 줄여 0.2cm): 풍선 소매 방지
-        return aS >= 0 ? (chestE * Math.max(0, 1 - aS / 6) + 0.2) * f : chestE * f;
+        return aS >= 0 ? (chestE * Math.max(0, 1 - aS / 6) - 0.5 * Math.min(1, Math.max(0, (aS - 3) / 5))) * f : chestE * f; // 소매는 팔 쪽으로 0.5cm 당긴다(풍선 소매 방지, 밑 팔은 숨겨짐)
       };
       const zcT = jpos(cmP, 'spine03____head')[2];
       const radialT = (x, y, z) => (armParamJS(X.cmP, x, y, z) >= 0 ? 0 : Math.min(1, Math.max(0, (neckY - 4 - y) / 8)));
@@ -817,6 +843,7 @@ float armParam(vec3 p) {
         cmH[i * 3 + 2] = cz[2] + (cmH[i * 3 + 2] - cz[2]) * f;
       }
     }
+    if (POSE.lipClose) closeLips(cmH, POSE.lipClose);
     const posed = poseLimbs(cmH, POSE.arm, POSE.leg, POSE.twist, POSE.fore);
     P = posed.P;
     const N = normals(P);
