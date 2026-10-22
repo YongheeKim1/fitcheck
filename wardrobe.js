@@ -312,8 +312,8 @@ async function runOutfit() {
     if (model.is3D && typeof Avatar3D !== 'undefined' && Avatar3D.dress) {
       // 3D 아바타: 옷을 3D 메시로 다시 입혀 바꿔 보여 준다(사이즈 안내 문장은 위 결과 그대로)
       const spec = {};
-      if (top) spec.top = { g: itemRow(top), color: (cuts.top && Avatar3D.garmentColor(cuts.top.texture)) || cuts.top?.avgColor || DEFAULT_COLOR.top, stretch: top.stretch };
-      if (bottom) spec.bottom = { g: itemRow(bottom), color: (cuts.bottom && Avatar3D.garmentColor(cuts.bottom.texture)) || cuts.bottom?.avgColor || DEFAULT_COLOR.bottom, stretch: bottom.stretch };
+      if (top) spec.top = { g: itemRow(top), color: (cuts.top && Avatar3D.garmentColor(cuts.top.texture)) || cuts.top?.avgColor || DEFAULT_COLOR.top, stretch: top.stretch, tex: cuts.top || null };
+      if (bottom) spec.bottom = { g: itemRow(bottom), color: (cuts.bottom && Avatar3D.garmentColor(cuts.bottom.texture)) || cuts.bottom?.avgColor || DEFAULT_COLOR.bottom, stretch: bottom.stretch, tex: cuts.bottom || null };
       const token = (wardrobe.dressToken = (wardrobe.dressToken || 0) + 1);
       Avatar3D.dress(model, spec).then((cv) => {
         if (!cv || token !== wardrobe.dressToken) return;
