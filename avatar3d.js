@@ -562,7 +562,7 @@ float armParam(vec3 p) {
     return knitT;
   }
 
-  // 헤더(섞인 실) 잔결: 가로로 조금 긴 밝기 얼룩(한 번만 만든다), 민무늬 상의 천의 사진 대신
+  // 헤더(섞인 실) 잔결: 세로로 조금 긴 밝기 얼룩(한 번만 만든다), 민무늬 상의 천의 사진 대신
   let heatherT = null;
   function heatherTex() {
     if (heatherT) return heatherT;
@@ -570,7 +570,7 @@ float armParam(vec3 p) {
     const g = c.getContext('2d'), im = g.createImageData(N, N);
     const v0 = new Float32Array(N * N); for (let i = 0; i < v0.length; i++) v0[i] = Math.random();
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-      let s = 0; for (let dx = -2; dx <= 2; dx++) s += v0[y * N + ((x + dx + N) % N)]; // 가로로 5칸 평균(실 방향)
+      let s = 0; for (let dy = -2; dy <= 2; dy++) s += v0[((y + dy + N) % N) * N + x]; // 세로로 5칸 평균(세로 실 결, 약 2~3mm)
       const v = Math.max(0, Math.min(255, 128 + (s / 5 - 0.5) * 2.2 * 255 * 0.5));
       const i = (y * N + x) * 4; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255;
     }
@@ -751,13 +751,13 @@ float armParam(vec3 p) {
         // 안쪽 면(밑단·소매 안으로 보이는 곳)은 어둡게
         .replace('#include <map_fragment>', '#include <map_fragment>\n'
           // 상품 무늬: 그림의 민무늬 자리는 중앙값 색 그대로라 (무늬색 - 중앙값)만 더한다(색감 그대로, 무늬 없는 곳은 이전과 같은 색).
-          // 옆·뒤는 둘러 그린 줄무늬(vPW2), 앞은 사진 무늬(vPW). 상의는 사진 대신 잔결(헤더) 밝기 변화 ±3%
+          // 옆·뒤는 둘러 그린 줄무늬(vPW2), 앞은 사진 무늬(vPW). 상의는 사진 대신 잔결(헤더, 세로 실 결) 밝기 변화 ±4.5%
           + (pr ? `if (gl_FrontFacing) {
             vec3 tw = mix(uPMed, texture2D(uWrap, vPUV2).rgb, clamp(vPW2, 0.0, 1.0));
             vec3 tp = mix(tw, texture2D(uPrint, vPUV).rgb, clamp(vPW, 0.0, 1.0));
             vec3 pc = max(diffuse + (tp - uPMed) * ${kind === 'bottom' ? '1.25' : '1.0'}, vec3(0.0));
             diffuseColor.rgb *= pc / max(diffuse, vec3(0.0001));
-            ${kind === 'top' ? 'diffuseColor.rgb *= 1.0 + 0.06 * (texture2D(uHeather, vMapUv * vec2(9.0, 13.0)).r - 0.5);' : ''}
+            ${kind === 'top' ? 'diffuseColor.rgb *= 1.0 + 0.09 * (texture2D(uHeather, vMapUv * 4.0).r - 0.5);' : ''}
           }\n` : '')
           + 'if (!gl_FrontFacing) diffuseColor.rgb *= ' + (kind === 'top' ? '0.7' : '0.8') + ';' // 바지는 앞 지퍼 쪽 겹친 천 사이로 안쪽이 보여 덜 어둡게
           + '\ndiffuseColor.rgb *= mix(0.82, 1.0, smoothstep(1.2, 1.5, edgeD));'); // 밑단·소매 끝 접어 박은 단(1.2~1.5cm, 18% 어둡게)
@@ -968,8 +968,27 @@ float armParam(vec3 p) {
       for (let i = 0; i < N; i++) if (sm2[i] && gar[i]) { a++; if (pm[i]) p++; }
       sleevePrint = a > 50 && p / a > 0.03;
     }
+    // 몸판 가운데(무늬 아닌 바탕 천)의 사진 밝기(중앙값): 3D 결과 밝기를 상품 사진에 맞출 때 쓴다
+    let centerL = null;
+    if (rb.torso?.length > 4) {
+      const rows = fixRows(rb.torso), K = tex.kind === 'model' ? 5 : 0, rr = rows.slice(K);
+      const Ls = [];
+      const lumAt = (i) => lumOf(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
+      for (let q = Math.floor(rr.length * 0.3); q <= Math.ceil(rr.length * 0.65) && q < rr.length; q++) {
+        const [pa, pb2] = rr[q].map(P2), y = Math.round((pa[1] + pb2[1]) / 2);
+        if (y < 1 || y >= ch - 1) continue;
+        for (let x = Math.round(pa[0] + (pb2[0] - pa[0]) * 0.3); x <= pa[0] + (pb2[0] - pa[0]) * 0.7; x++) {
+          for (let dy = -3; dy <= 3; dy++) {
+            const yy = y + dy, i = yy * cw + x;
+            if (x < 1 || x >= cw - 1 || yy < 1 || yy >= ch - 1 || !gar[i] || pm[i]) continue;
+            Ls.push(lumAt(i));
+          }
+        }
+      }
+      if (Ls.length > 50) { Ls.sort((p, q) => p - q); centerL = Ls[Ls.length >> 1]; }
+    }
     const res = {
-      medHex, cw, ch, out, wrapOut, blobs, hasWrap: nFull >= ch * 0.03, sleevePrint, maps: new Map(), med3: med,
+      centerL, medHex, cw, ch, out, wrapOut, blobs, hasWrap: nFull >= ch * 0.03, sleevePrint, maps: new Map(), med3: med,
       med: new THREE.Color(...med.map((v) => v / 255)).convertSRGBToLinear(),
       toUV: (p) => [(p.x - x0) / bw, 1 - (p.y - y0) / bh],
     };
@@ -1234,6 +1253,7 @@ float armParam(vec3 p) {
     const neckY = jpos(cmP, 'neck01____head')[1];
     const TAU = Math.PI * 2;
     U.uTopOn.value = 0; U.uBotOn.value = 0;
+    let topMat = null, topTarget = null, topPrint = null; // 상의 밝기 맞추기(상품 사진이 있을 때)
     if (outfit.top?.g) {
       const g = outfit.top.g;
       const it = C.items[g.sleeve != null && g.sleeve > 40 ? 'longtee' : 'tee'];
@@ -1268,6 +1288,7 @@ float armParam(vec3 p) {
         }, cmP);
       }
       const mat = clothMaterial('top', { color: outfit.top.color, map: C.tex[it.name + '_ao.jpg'], bump: knitTex(), print: pt }, U);
+      if (pb?.centerL) { topMat = mat; topTarget = pb.centerL; topPrint = { ...pt, med3: pb.med3 }; }
       U.uZc.value = zcT;
       const mesh = clothMesh(it, P, cmP, ease, mat, U.uHem.value, radialT, zcT, printFn);
       U.uHemM.value = mesh.userData.ext.yMin; U.uSleeveM.value = mesh.userData.ext.sMax;
@@ -1331,7 +1352,30 @@ float armParam(vec3 p) {
     renderer.setPixelRatio(1); renderer.setSize(CW * SS, CH * SS, false);
     scene.environment = studioEnv; scene.environmentIntensity = LIGHT.env;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = LIGHT.exposure;
-    const full = X.shot();
+    // 밝기를 잴 때는 무늬를 빼고(가슴 로고가 재는 상자의 절반을 덮을 수 있다) 바탕 천 색만으로 한 번 그린다
+    let full;
+    if (topMat && topTarget && topPrint) {
+      const plain = new THREE.DataTexture(new Uint8Array([...topPrint.med3, 255]), 1, 1); plain.colorSpace = THREE.SRGBColorSpace; plain.needsUpdate = true;
+      const keep = [topPrint.mapU.value, topPrint.wrapU.value];
+      topPrint.mapU.value = topPrint.wrapU.value = plain;
+      full = X.shot();
+      [topPrint.mapU.value, topPrint.wrapU.value] = keep;
+      plain.dispose();
+    } else full = X.shot();
+    // 상의 밝기 맞추기: 3D 조명 아래 몸판 가운데 밝기(중앙값)가 상품 사진 몸판 가운데(무늬 아닌 바탕 천) 밝기와 같아지게
+    // 색에 한 번 배율을 곱해 다시 그린다(3D 조명이 사진보다 가슴을 15% 안팎 어둡게 그린다)
+    if (topMat && topTarget) {
+      const sp = jpos(P, 'spine03____head'), y0 = Math.round(FLOOR - (sp[1] - 2) * X.s), y1 = Math.round(FLOOR - (sp[1] - 20) * X.s);
+      const x0 = Math.round(CW / 2 - 7 * X.s), x1 = Math.round(CW / 2 + 7 * X.s);
+      const dd = full.getContext('2d').getImageData(x0, y0, x1 - x0, y1 - y0).data, Ls = [];
+      for (let i = 0; i < dd.length; i += 4) if (dd[i + 3] > 200) Ls.push(lumOf(dd[i], dd[i + 1], dd[i + 2]));
+      if (Ls.length > 50) {
+        Ls.sort((p, q) => p - q);
+        const lin = (v) => Math.pow(Math.max(1, v) / 255, 2.2), gain = Math.min(topTarget < 60 ? 1.12 : 1.6, Math.max(0.8, lin(topTarget) / lin(Ls[Ls.length >> 1]))); // 검은 옷은 조금만(많이 밝히면 따뜻한 조명에 갈색으로 뜬다)
+        if (Math.abs(gain - 1) > 0.03) topMat.color.multiplyScalar(gain);
+        if (Math.abs(gain - 1) > 0.03 || topPrint) full = X.shot();
+      } else if (topPrint) full = X.shot();
+    }
     meshes.forEach((o) => { scene.remove(o); o.geometry.dispose(); o.material.dispose(); });
     U.uTopOn.value = 0; U.uBotOn.value = 0; ca.fill(0); cov.needsUpdate = true;
     if (X.facePaste && X.face?.img) full.getContext('2d').drawImage(X.face.img, X.facePaste.x, X.facePaste.y, X.face.img.width * X.facePaste.k, X.face.img.height * X.facePaste.k);

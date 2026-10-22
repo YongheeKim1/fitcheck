@@ -4,7 +4,7 @@ CC0 1.0 Universal(퍼블릭 도메인)로 공개되어 있습니다.
 
 - 기본 메시·타깃·뼈대: https://github.com/makehumancommunity/makehuman (makehuman/data, license.txt의 "C. The license for the bundled assets")
 - 피부·머리카락·눈썹·속눈썹·눈·신발: MakeHuman 시스템 자산(skins/young_lightskinned_male_diffuse3, hair/short02,
-  eyebrows/eyebrow001, eyelashes/eyelashes01, eyes/brownlight, clothes/shoes05)
+  eyebrows/eyebrow008, eyelashes/eyelashes01, eyes/brownlight, clothes/shoes05)
 
 - 얼굴 다듬기 타깃(mouth/chin/head/cheek/nose/eyebrows/neck/eyes): MakeHuman makehuman/data/targets (CC0, 2020년 명시 공개)
 

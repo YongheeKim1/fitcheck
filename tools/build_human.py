@@ -205,7 +205,7 @@ def add_proxy(name, tex, objname=None, kind='hair'):
 
 add_proxy('short02', 'hair.png', kind='hair')
 for _h in HAIR_ALT: add_proxy(_h, 'hair_%s.png' % _h, kind='hair')
-BROW = os.environ.get('BROW', 'eyebrow001')  # 다른 눈썹(eyebrow002 등)을 시험할 때 BROW=이름
+BROW = os.environ.get('BROW', 'eyebrow008')  # 숱 많고 덜 휜 남성 눈썹(eyebrow001은 가늘고 안쪽이 내려가 찡그린 듯 보였다). 다른 눈썹 시험: BROW=이름
 add_proxy(BROW, 'eyebrow.png', kind='brow')
 add_proxy('eyelashes01', 'lashes.png', kind='lash')
 add_proxy('eyes', 'eye.png', kind='eye')
