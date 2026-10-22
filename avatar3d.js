@@ -311,7 +311,7 @@ const Avatar3D = (() => {
   };
   const LIGHT = { key: 2.6, fill: 0.25, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
   const POSE = { arm: 7.4, fore: 0, leg: 2.5, twist: -18, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.2, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0, toeOut: 5, weight: 1.0, elbow: 7 };
-  const HAND_CURL = { palmSign: -1, seg: [8, 14, 8], more: 0.6, close: -6, thumb: [32, 10, 10], thumbIn: -38, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
+  const HAND_CURL = { palmSign: -1, seg: [8, 14, 8], more: 0.6, close: -9, thumb: [18, 8, 8], thumbIn: -22, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
   function normals(P) {
@@ -938,7 +938,7 @@ float armParam(vec3 p) {
     const skinMat = new THREE.MeshPhysicalMaterial({
       map: skinT, color: new THREE.Color(tint[0], tint[1], tint[2]).convertSRGBToLinear(),
       side: THREE.DoubleSide, // 엄지 사이처럼 굽힌 곳의 아주 작은 틈으로 뒤(검은 속옷)가 점처럼 비치지 않게
-      roughness: 0.63, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.9, 0.45, 0.38), clearcoat: 0.05, clearcoatRoughness: 0.6,
+      roughness: 0.68, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.9, 0.45, 0.38), clearcoat: 0.05, clearcoatRoughness: 0.6,
       ...(POSE.pores ? { bumpMap: poreTex(), bumpScale: POSE.pores } : {}), // 모공 결: 매끈한 플라스틱 피부 대신 빛이 잘게 흩어지게
     });
     const body = new THREE.Mesh(geom(data.body.ref, data.body.uv, data.body.tris, P, N), skinMat);
@@ -959,6 +959,14 @@ float armParam(vec3 p) {
     for (const i of data.meta.crotch) if (Math.abs(cmP[i * 3]) < 1) crotchY = Math.max(crotchY, cmP[i * 3 + 1]);
     const briefU = { uTop: { value: hipY + 7.5 }, uBot: { value: crotchY - 7 }, uHalf: { value: GarmentRender.visW(m.hip, 'hip') / 2 + 4 }, uCav: { value: POSE.cav } };
     // 3D 옷을 입혔을 때 옷 밑 몸 숨기기(dress()가 값을 바꾼다): 덮는 정점(aCov)이면서 옷이 남은 자리
+    {
+      let chinY = Infinity; const hwj = data.w.head;
+      for (let i = 0; i < hwj.length; i++) if (hwj[i] > 240 && Math.abs(cmP[i * 3]) < 1.5 && cmP[i * 3 + 2] > 0 && cmP[i * 3 + 1] < chinY) chinY = cmP[i * 3 + 1];
+      const v3 = (a) => new THREE.Vector3(...a);
+      briefU.uChin = { value: v3([0, chinY, jpos(cmP, 'neck01____head')[2]]) };
+      briefU.uNip = { value: jpos(cmP, 'breast.L____head')[1] };
+      briefU.uKnees = { value: [v3(jpos(cmP, 'lowerleg01.L____head')), v3(jpos(cmP, 'lowerleg01.R____head')), v3(jpos(cmP, 'lowerarm01.L____head')), v3(jpos(cmP, 'lowerarm01.R____head'))] };
+    }
     briefU.uClav = { value: new THREE.Vector3(0, jpos(cmP, 'neck01____head')[1] - 4.2, jpos(cmP, 'neck01____head')[2]) };
     Object.assign(briefU, { uTopOn: { value: 0 }, uBotOn: { value: 0 }, uHem: { value: -1e3 }, uSleeve: { value: -1 }, uWaist: { value: -1e3 }, uPHem: { value: 1e3 }, uHemM: { value: -1e3 }, uSleeveM: { value: 100 }, uWaistM: { value: 1e3 }, uPHemM: { value: -1e3 }, uZc: { value: 0 }, ...clothArmUniforms(cmP) });
     body.geometry.setAttribute('aCov', new THREE.BufferAttribute(new Float32Array(data.body.ref.length * 2), 2));
@@ -966,7 +974,7 @@ float armParam(vec3 p) {
       Object.assign(sh.uniforms, briefU);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nattribute float cav;\nattribute vec2 aCov;\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;\nvCav = cav;\nvCov = aCov;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nuniform vec3 uClav;\nfloat briefM;\n' + CLOTH_GLSL)
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nuniform vec3 uClav, uChin;\nuniform float uNip;\nuniform vec3 uKnees[4];\nfloat briefM;\n' + CLOTH_GLSL)
         .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
           {
             if (uTopOn > 0.5 && vCov.x > 0.99) discard;
@@ -986,6 +994,14 @@ float armParam(vec3 p) {
             float line = uClav.y + 0.1 * ax - 0.004 * ax * ax;
             float d = line - vRest.y;
             float frontC = smoothstep(uClav.z - 4.0, uClav.z + 2.0, vRest.z) * (1.0 - smoothstep(13.0, 16.0, ax)) * smoothstep(1.5, 3.0, ax);
+            // 턱 밑 목 앞쪽 그늘, 가슴 아래 옅은 그늘, 무릎·팔꿈치 혈색 3%
+            float jaw = (1.0 - smoothstep(0.0, 4.0, uChin.y - vRest.y)) * step(vRest.y, uChin.y) * (1.0 - smoothstep(4.0, 7.0, ax)) * smoothstep(uChin.z - 3.0, uChin.z + 1.0, vRest.z);
+            diffuseColor.rgb *= 1.0 - 0.12 * jaw;
+            float pec = smoothstep(0.0, 1.2, uNip - 2.5 - vRest.y) * (1.0 - smoothstep(1.2, 3.5, uNip - 2.5 - vRest.y)) * smoothstep(3.0, 6.0, ax) * (1.0 - smoothstep(12.0, 15.0, ax)) * smoothstep(uClav.z - 2.0, uClav.z + 4.0, vRest.z);
+            diffuseColor.rgb *= 1.0 - 0.07 * pec;
+            float red = 0.0;
+            for (int k = 0; k < 4; k++) red = max(red, 1.0 - smoothstep(1.5, 5.0, distance(vRest, uKnees[k])));
+            diffuseColor.rgb *= vec3(1.0 + 0.03 * red, 1.0 - 0.01 * red, 1.0 - 0.015 * red);
             diffuseColor.rgb *= 1.0 - frontC * (0.13 * smoothstep(0.5, 1.1, d) * (1.0 - smoothstep(1.5, 2.8, d)) - 0.05 * (1.0 - smoothstep(0.0, 0.7, abs(d + 0.3))));
           }
           {
@@ -1096,6 +1112,7 @@ float armParam(vec3 p) {
               {
                 float e = max(fwidth(vWY), 0.02);
                 float sole = 1.0 - smoothstep(1.6 - e, 1.6 + e, vWY);
+                diffuseColor.rgb *= 0.92; // 옆판은 아주 옅은 회색
                 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.78, 0.77), sole);
                 diffuseColor.rgb *= 1.0 - 0.5 * (1.0 - smoothstep(0.0, 0.18, abs(vWY - 1.7)));
                 diffuseColor.rgb *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.6, vWY));
