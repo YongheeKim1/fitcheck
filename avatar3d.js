@@ -562,6 +562,24 @@ float armParam(vec3 p) {
     return knitT;
   }
 
+  // 헤더(섞인 실) 잔결: 가로로 조금 긴 밝기 얼룩(한 번만 만든다), 민무늬 상의 천의 사진 대신
+  let heatherT = null;
+  function heatherTex() {
+    if (heatherT) return heatherT;
+    const N = 128, c = document.createElement('canvas'); c.width = c.height = N;
+    const g = c.getContext('2d'), im = g.createImageData(N, N);
+    const v0 = new Float32Array(N * N); for (let i = 0; i < v0.length; i++) v0[i] = Math.random();
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      let s = 0; for (let dx = -2; dx <= 2; dx++) s += v0[y * N + ((x + dx + N) % N)]; // 가로로 5칸 평균(실 방향)
+      const v = Math.max(0, Math.min(255, 128 + (s / 5 - 0.5) * 2.2 * 255 * 0.5));
+      const i = (y * N + x) * 4; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255;
+    }
+    g.putImageData(im, 0, 0);
+    heatherT = new THREE.CanvasTexture(c);
+    heatherT.wrapS = heatherT.wrapT = THREE.RepeatWrapping; heatherT.anisotropy = 8;
+    return heatherT;
+  }
+
   // 상품 사진(오린 옷 캔버스)의 대표색: 가운데 영역의 불투명 픽셀 중 살색·배경색(밝은 무채색)을 뺀 중앙값
   function garmentColor(canvas) {
     if (!canvas?.width) return null;
@@ -589,10 +607,25 @@ float armParam(vec3 p) {
   }
 
   // 옷 색: 아주 어두운 색은 무채색 쪽으로(검은 옷이 갈색으로 뜨지 않게), 밝기 바닥 0.07(데님 결이 보이게)
-  function clothColor(hex) {
+  // keepHue(바지): OKLab 채도가 있는 어두운 색(인디고 데님)은 무채색으로 돌리지 않고 색감 그대로, 밝기 바닥 0.11(데님 결이 보이게)
+  function oklabC(rgb) {
+    const lin = rgb.map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    const l = Math.cbrt(0.4122214708 * lin[0] + 0.5363325363 * lin[1] + 0.0514459929 * lin[2]);
+    const m = Math.cbrt(0.2119034982 * lin[0] + 0.6806995451 * lin[1] + 0.1073969566 * lin[2]);
+    const s = Math.cbrt(0.0883024619 * lin[0] + 0.2817188376 * lin[1] + 0.6299787005 * lin[2]);
+    const L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+    const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+    return [L, Math.hypot(A, B)];
+  }
+  function clothColor(hex, keepHue = false) {
     const [r, g, b] = hexRGB(hex || '#808080').map((v) => v / 255);
     let L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     let c = [r, g, b];
+    const [okL, okC] = oklabC([r, g, b]);
+    if (keepHue && okC > 0.015 && okC / Math.max(0.05, okL) > 0.09) { // 어두운 인디고(채도/밝기 0.12 안팎)도 잡게
+      if (L < 0.11) { const k = 0.11 / Math.max(0.005, L); c = c.map((v) => Math.min(1, v * k)); }
+      return new THREE.Color(c[0], c[1], c[2]).convertSRGBToLinear();
+    }
     if (L < 0.22) { const t = Math.min(1, (1 - L / 0.22) * 1.3) * 0.9; c = c.map((v) => v * (1 - t) + L * t); }
     if (L < 0.09) { const k = 0.09 / Math.max(0.005, L); c = c.map((v) => Math.min(1, v * k + (0.09 - L) * (L < 0.005 ? 1 : 0))); }
     return new THREE.Color(c[0], c[1], c[2]).convertSRGBToLinear();
@@ -679,6 +712,10 @@ float armParam(vec3 p) {
       for (let i = 0; i < ref.length; i++) { puv[i * 2] = pr.uv[ref[i] * 2]; puv[i * 2 + 1] = pr.uv[ref[i] * 2 + 1]; pw[i] = pr.w[ref[i]]; }
       g.setAttribute('pUV', new THREE.BufferAttribute(puv, 2));
       g.setAttribute('pW', new THREE.BufferAttribute(pw, 1));
+      const puv2 = new Float32Array(ref.length * 2), pw2 = new Float32Array(ref.length);
+      for (let i = 0; i < ref.length; i++) { puv2[i * 2] = pr.uv2[ref[i] * 2]; puv2[i * 2 + 1] = pr.uv2[ref[i] * 2 + 1]; pw2[i] = pr.w2[ref[i]]; }
+      g.setAttribute('pUV2', new THREE.BufferAttribute(puv2, 2));
+      g.setAttribute('pW2', new THREE.BufferAttribute(pw2, 1));
     }
     const mesh = new THREE.Mesh(g, mat);
     mesh.castShadow = mesh.receiveShadow = true;
@@ -690,8 +727,8 @@ float armParam(vec3 p) {
   // 옷 재질: 사이즈표 길이로 자르기(원래 자세 좌표로 판정) + 3D 조명
   function clothMaterial(kind, opts, U) {
     const mat = new THREE.MeshPhysicalMaterial({
-      color: clothColor(opts.color).multiplyScalar(kind === 'bottom' ? 1.25 : 1), side: THREE.DoubleSide, roughness: kind === 'bottom' ? 0.93 : 0.9, // 데님 결 지도 평균(약 0.8)만큼 밝혀 상품색에 맞춘다
-      sheen: kind === 'bottom' ? 0 : 0.5, sheenRoughness: 0.7, sheenColor: clothColor(opts.color).multiplyScalar(0.6).addScalar(0.12),
+      color: clothColor(opts.color, opts.keepHue).multiplyScalar(kind === 'bottom' ? 1.25 : 1), side: THREE.DoubleSide, roughness: kind === 'bottom' ? 0.93 : 0.9, // 데님 결 지도 평균(약 0.8)만큼 밝혀 상품색에 맞춘다
+      sheen: kind === 'bottom' ? 0 : 0.5, sheenRoughness: 0.7, sheenColor: clothColor(opts.color, opts.keepHue).multiplyScalar(0.6).addScalar(0.12),
       ...(opts.map ? { map: opts.map } : {}), ...(opts.normalMap ? { normalMap: opts.normalMap, normalScale: new THREE.Vector2(0.8, 0.8) } : {}),
       ...(opts.bump ? { bumpMap: opts.bump, bumpScale: 0.25 } : {}),
     });
@@ -699,11 +736,11 @@ float armParam(vec3 p) {
     mat.customProgramCacheKey = () => 'cloth-' + kind + (pr ? '-print' : ''); // 상의·바지는 자르는 식이 달라 셰이더를 따로
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, U);
-      if (pr) { sh.uniforms.uPrint = { value: pr.map }; sh.uniforms.uPMed = { value: pr.med }; }
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nvarying vec3 vRest;' + (pr ? '\nattribute vec2 pUV;\nattribute float pW;\nvarying vec2 vPUV;\nvarying float vPW;' : ''))
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;' + (pr ? '\nvPUV = pUV; vPW = pW;' : ''));
+      if (pr) { sh.uniforms.uPrint = pr.mapU; sh.uniforms.uWrap = pr.wrapU; sh.uniforms.uPMed = { value: pr.med }; sh.uniforms.uHeather = { value: heatherTex() }; }
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nvarying vec3 vRest;' + (pr ? '\nattribute vec2 pUV, pUV2;\nattribute float pW, pW2;\nvarying vec2 vPUV, vPUV2;\nvarying float vPW, vPW2;' : ''))
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;' + (pr ? '\nvPUV = pUV; vPW = pW; vPUV2 = pUV2; vPW2 = pW2;' : ''));
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\n' + CLOTH_GLSL
-        + (pr ? '\nuniform sampler2D uPrint;\nuniform vec3 uPMed;\nvarying vec2 vPUV;\nvarying float vPW;' : ''))
+        + (pr ? '\nuniform sampler2D uPrint, uWrap, uHeather;\nuniform vec3 uPMed;\nvarying vec2 vPUV, vPUV2;\nvarying float vPW, vPW2;' : ''))
         .replace('#include <clipping_planes_fragment>', kind === 'top' ? `#include <clipping_planes_fragment>
           float hemY = uHem - 1.2 * smoothstep(0.0, 12.0, uZc - vRest.z); // 뒤·옆이 조금 더 길다
           float aS = armParam(vRest);
@@ -713,17 +750,14 @@ float armParam(vec3 p) {
           float edgeD = min(uWaist - vRest.y, vRest.y - uPHem);`)
         // 안쪽 면(밑단·소매 안으로 보이는 곳)은 어둡게
         .replace('#include <map_fragment>', '#include <map_fragment>\n'
-          // 상품 무늬: 평평한 곳은 지금 색 그대로(무늬색/중앙값 비율), 어두운 옷을 밝혀 둔 만큼은 더해서 무늬 대비 유지
-          + (pr ? `if (gl_FrontFacing && vPW > 0.002) {
-            vec3 tl = texture2D(uPrint, vPUV).rgb;
-            vec3 pa = tl * diffuse / max(uPMed, vec3(0.001));
-            vec3 pb = tl + diffuse - uPMed;
-            vec3 pc = max(mix(pa, pb, step(uPMed, diffuse)), vec3(0.0));
-            ${kind === 'bottom' ? `// 바지: 어두운 색을 무채색 쪽으로 돌린 만큼 데님의 푸른 기가 사라져 검은 바지처럼 보인다 → 상품 색감 절반 되살리기
-            vec3 lw = vec3(0.2126, 0.7152, 0.0722);
-            float lp = dot(pc, lw);
-            pc = mix(pc, tl / max(dot(tl, lw), 0.0005) * lp, 0.5);` : ''}
-            diffuseColor.rgb *= mix(vec3(1.0), pc / max(diffuse, vec3(0.0001)), clamp(vPW, 0.0, 1.0));
+          // 상품 무늬: 그림의 민무늬 자리는 중앙값 색 그대로라 (무늬색 - 중앙값)만 더한다(색감 그대로, 무늬 없는 곳은 이전과 같은 색).
+          // 옆·뒤는 둘러 그린 줄무늬(vPW2), 앞은 사진 무늬(vPW). 상의는 사진 대신 잔결(헤더) 밝기 변화 ±3%
+          + (pr ? `if (gl_FrontFacing) {
+            vec3 tw = mix(uPMed, texture2D(uWrap, vPUV2).rgb, clamp(vPW2, 0.0, 1.0));
+            vec3 tp = mix(tw, texture2D(uPrint, vPUV).rgb, clamp(vPW, 0.0, 1.0));
+            vec3 pc = max(diffuse + (tp - uPMed) * ${kind === 'bottom' ? '1.25' : '1.0'}, vec3(0.0));
+            diffuseColor.rgb *= pc / max(diffuse, vec3(0.0001));
+            ${kind === 'top' ? 'diffuseColor.rgb *= 1.0 + 0.06 * (texture2D(uHeather, vMapUv * vec2(9.0, 13.0)).r - 0.5);' : ''}
           }\n` : '')
           + 'if (!gl_FrontFacing) diffuseColor.rgb *= ' + (kind === 'top' ? '0.7' : '0.8') + ';' // 바지는 앞 지퍼 쪽 겹친 천 사이로 안쪽이 보여 덜 어둡게
           + '\ndiffuseColor.rgb *= mix(0.82, 1.0, smoothstep(1.2, 1.5, edgeD));'); // 밑단·소매 끝 접어 박은 단(1.2~1.5cm, 18% 어둡게)
@@ -731,127 +765,246 @@ float armParam(vec3 p) {
     return mat;
   }
 
-  // ---------- 상품 사진 무늬(로고·프린트·줄무늬·데님 워싱)를 3D 옷 앞판에 입히기 ----------
-  // 2D 엔진이 뽑은 옷 그림(tex.texture, 옷 밖은 투명)과 띠(ribbons: 어깨·겨드랑이·밑단, 소매, 허리·다리)를 쓴다.
-  // 그림은 옷 범위만 잘라 1024px 안으로 줄이고, 사진 속 큰 명암(조명·큰 주름)은 넓게 흐린 밝기로 나눠 평평하게 한다
-  // (3D 조명·접힘이 따로 입혀지므로 두 번 어두워지지 않게). 옷 밖·구멍은 주변 옷 색으로 메운다.
+  // ---------- 상품 사진 무늬(로고·프린트·줄무늬)를 3D 옷에 입히기 ----------
+  // 2D 엔진이 뽑은 옷 그림(tex.texture, 옷 밖은 투명)과 띠(ribbons)를 쓴다.
+  // 1) 옷 범위만 잘라(최대 1024px) 사진 속 큰 명암을 바탕 천 밝기로 나눠 평평하게(색감은 그대로: RGB에 같은 배율)
+  // 2) 무늬 찾기: 주변 바탕 천과 색이 다르거나 밝기가 크게 다른 덩어리만 무늬로 본다. 나머지(민무늬 천)는 사진 대신
+  //    중앙값 색 + 셰이더의 잔결(헤더)로: 사진의 주름·얼룩·소매 줄·밑단 벨트가 옮겨 오지 않게
+  // 3) 가로로 옷 폭 거의 전체를 덮는 줄(줄무늬·체크)은 옆·뒤까지 둘러 이어 그린다(wrap)
   const printCache = new WeakMap();
   const texIds = new WeakMap(); let texN = 0;
   const texId = (t) => { if (!texIds.has(t)) texIds.set(t, ++texN); return texIds.get(t); };
-  function printTexture(tex, medHex) {
+  const lumOf = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+  function printBase(tex, medHex) {
     const hit = printCache.get(tex.texture);
     if (hit && hit.medHex === medHex) return hit;
     const src = tex.texture;
     const W = src.width, H = src.height;
-    const sg = src.getContext('2d', { willReadFrequently: true });
-    const all = sg.getImageData(0, 0, W, H).data;
+    const all = src.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
     let x0 = W, x1 = -1, y0 = H, y1 = -1;
     for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) if (all[(y * W + x) * 4 + 3] > 128) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
     if (x1 < x0) return null;
+    // 펼친 사진은 2D 추출이 밝은 줄무늬를 지워 옷 범위가 짧게 잡힐 수 있다 → 띠 범위도 포함
+    if (tex.kind === 'flat') for (const rows of [tex.ribbons?.torso, tex.ribbons?.waist, ...(tex.ribbons?.legs || []).map((l) => l?.ribbon)]) for (const r of rows || []) for (const q of r) {
+      x0 = Math.min(x0, Math.floor(q.x)); x1 = Math.max(x1, Math.ceil(q.x)); y0 = Math.min(y0, Math.floor(q.y)); y1 = Math.max(y1, Math.ceil(q.y));
+    }
     x0 = Math.max(0, x0 - 4); y0 = Math.max(0, y0 - 4); x1 = Math.min(W - 1, x1 + 4); y1 = Math.min(H - 1, y1 + 4);
-    const bw = x1 - x0 + 1, bh = y1 - y0 + 1, k = Math.min(1, 1024 / Math.max(bw, bh));
-    const cw = Math.max(8, Math.round(bw * k)), ch = Math.max(8, Math.round(bh * k));
-    const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1, k = Math.min(1, 900 / Math.max(bw, bh));
+    const cw = Math.max(8, Math.round(bw * k)), ch = Math.max(8, Math.round(bh * k)), N = cw * ch;
+    const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+    const c = mk(cw, ch);
     const g = c.getContext('2d', { willReadFrequently: true });
     g.imageSmoothingQuality = 'high';
     g.drawImage(src, x0, y0, bw, bh, 0, 0, cw, ch);
-    const im = g.getImageData(0, 0, cw, ch), d = im.data;
-    // 바닥에 펼친 사진: 2D 추출은 배경과 비슷한 흰 글자·밝은 줄무늬를 배경으로 지워 버린다(사진 모드는 그대로 둔다).
-    // 3D 무늬는 띠 안쪽에서 원본 사진을 다시 쓰되, 위아래 가까이에 옷(배경과 다른 색)이 있는 곳만 옷으로 본다
-    // (목둘레 파인 곳처럼 위가 배경인 곳은 빼고, 옷 사이에 낀 흰 줄·글자는 살린다)
+    const d = g.getImageData(0, 0, cw, ch).data;
+    const P2 = (p) => [(p.x - x0) * k, (p.y - y0) * k];
+    const rb = tex.ribbons || {};
+    const polyMask = (list) => {
+      const mc = mk(cw, ch), mg = mc.getContext('2d', { willReadFrequently: true }); mg.fillStyle = '#fff';
+      for (const rows of list) {
+        if (!rows?.length) continue;
+        mg.beginPath();
+        rows.forEach((r, j) => (j ? mg.lineTo(...P2(r[0])) : mg.moveTo(...P2(r[0]))));
+        rows.slice().reverse().forEach((r) => mg.lineTo(...P2(r[1])));
+        mg.closePath(); mg.fill();
+      }
+      const md = mg.getImageData(0, 0, cw, ch).data, o = new Uint8Array(N);
+      for (let i = 0; i < N; i++) o[i] = md[i * 4 + 3] > 127 ? 1 : 0;
+      return o;
+    };
+    // 바닥에 펼친 사진: 2D 추출은 배경과 비슷한 흰 글자·밝은 줄을 배경으로 지운다(사진 모드는 그대로 둔다).
+    // 3D 무늬는 띠 안쪽에서 원본 사진을 다시 쓰되, 위아래 가까이에 옷(배경과 다른 색)이 있는 곳만(목둘레 파인 곳 제외)
     if (tex.kind === 'flat' && tex.source) {
-      const sc = document.createElement('canvas'); sc.width = cw; sc.height = ch;
-      const sg2 = sc.getContext('2d', { willReadFrequently: true }); sg2.imageSmoothingQuality = 'high';
+      const sc = mk(cw, ch), sg2 = sc.getContext('2d', { willReadFrequently: true }); sg2.imageSmoothingQuality = 'high';
       sg2.drawImage(tex.source, x0, y0, bw, bh, 0, 0, cw, ch);
       const sd = sg2.getImageData(0, 0, cw, ch).data;
-      // 배경색: 원본 사진 테두리 평균
       const so = tex.source.getContext('2d', { willReadFrequently: true });
       const SW = tex.source.width, SH = tex.source.height;
       const edge = [so.getImageData(0, 0, SW, 2).data, so.getImageData(0, SH - 2, SW, 2).data, so.getImageData(0, 0, 2, SH).data, so.getImageData(SW - 2, 0, 2, SH).data];
       const bgc = [0, 0, 0]; let bn = 0;
       for (const e of edge) for (let i = 0; i < e.length; i += 4) { bgc[0] += e[i]; bgc[1] += e[i + 1]; bgc[2] += e[i + 2]; bn++; }
       bgc.forEach((v, j) => { bgc[j] = v / bn; });
-      // 띠 다각형(몸판·다리)
-      const mc = document.createElement('canvas'); mc.width = cw; mc.height = ch;
-      const mg = mc.getContext('2d', { willReadFrequently: true }); mg.fillStyle = '#fff';
-      const poly = (rows) => {
-        if (!rows?.length) return;
-        const P2 = (p) => [(p.x - x0) * k, (p.y - y0) * k];
-        mg.beginPath();
-        rows.forEach((r, j) => (j ? mg.lineTo(...P2(r[0])) : mg.moveTo(...P2(r[0]))));
-        rows.slice().reverse().forEach((r) => mg.lineTo(...P2(r[1])));
-        mg.closePath(); mg.fill();
-      };
-      const rb = tex.ribbons || {};
-      poly(fixRows(rb.torso)); poly(fixRows(rb.waist)); (rb.legs || []).forEach((l) => l && poly(fixRows(l.ribbon)));
-      const md = mg.getImageData(0, 0, cw, ch).data;
-      const nb = new Uint8Array(cw * ch);
-      for (let i = 0; i < cw * ch; i++) nb[i] = Math.hypot(sd[i * 4] - bgc[0], sd[i * 4 + 1] - bgc[1], sd[i * 4 + 2] - bgc[2]) > 30 ? 1 : 0;
-      const Rv = Math.max(4, Math.round(ch * 0.06));
-      const up = new Int32Array(cw * ch), dn = new Int32Array(cw * ch);
+      const inside = polyMask([fixRows(rb.torso), fixRows(rb.waist), ...(rb.legs || []).map((l) => l && fixRows(l.ribbon))]);
+      const nb = new Uint8Array(N);
+      for (let i = 0; i < N; i++) nb[i] = Math.hypot(sd[i * 4] - bgc[0], sd[i * 4 + 1] - bgc[1], sd[i * 4 + 2] - bgc[2]) > 30 ? 1 : 0;
+      // 위아래 또는 좌우 양쪽 가까이(옷 길이의 12% 안)에 옷이 있으면 옷(글자 속·줄 사이), 목둘레 파인 곳은 위가 배경이라 제외
+      const Rv = Math.max(4, Math.round(ch * 0.12));
+      const up = new Int32Array(N), dn = new Int32Array(N), lt = new Int32Array(N), rt = new Int32Array(N);
       for (let x = 0; x < cw; x++) {
         let last = -1e9;
         for (let y = 0; y < ch; y++) { const i = y * cw + x; if (nb[i]) last = y; up[i] = y - last; }
         last = 1e9;
         for (let y = ch - 1; y >= 0; y--) { const i = y * cw + x; if (nb[i]) last = y; dn[i] = last - y; }
       }
-      for (let i = 0; i < cw * ch; i++) {
-        if (!md[i * 4 + 3]) continue; // 띠 안은 원본 우선(2D가 구멍으로 메운 흰 글자도 원래 색으로)
-        if (!(nb[i] || (up[i] <= Rv && dn[i] <= Rv))) continue;
+      for (let y = 0; y < ch; y++) {
+        let last = -1e9;
+        for (let x = 0; x < cw; x++) { const i = y * cw + x; if (nb[i]) last = x; lt[i] = x - last; }
+        last = 1e9;
+        for (let x = cw - 1; x >= 0; x--) { const i = y * cw + x; if (nb[i]) last = x; rt[i] = last - x; }
+      }
+      for (let i = 0; i < N; i++) {
+        if (!inside[i] || !(nb[i] || ((up[i] <= Rv && dn[i] <= Rv) || (lt[i] <= Rv && rt[i] <= Rv)))) continue;
         d[i * 4] = sd[i * 4]; d[i * 4 + 1] = sd[i * 4 + 1]; d[i * 4 + 2] = sd[i * 4 + 2]; d[i * 4 + 3] = 255;
       }
     }
-    // 넓게 흐린 색: 바탕 천(중앙값 색에 가까운 픽셀)만 평균 → 로고·프린트는 빼고 사진 조명·큰 주름만 남긴다
-    // (로고까지 섞으면 로고 둘레가 어둡게/밝게 테두리 진다). 절반씩 줄여 폭 약 1/12까지 → 다시 키운다
+    // 바탕 천만의 넓게 흐린 색(로고·프린트는 빼고 사진 조명·큰 주름만): 절반씩 줄여 폭 약 1/12까지 → 다시 키운다
     const med = hexRGB(medHex || '#808080');
-    const base = document.createElement('canvas'); base.width = cw; base.height = ch;
+    const lumM = lumOf(...med);
+    const base = mk(cw, ch);
     {
       const bg2 = base.getContext('2d'), bi = bg2.createImageData(cw, ch), bd = bi.data;
-      const lumM = 0.2126 * med[0] + 0.7152 * med[1] + 0.0722 * med[2];
       for (let i = 0; i < d.length; i += 4) {
         bd[i] = d[i]; bd[i + 1] = d[i + 1]; bd[i + 2] = d[i + 2];
-        // 밝기는 넓게 허용(그늘·하이라이트), 색 차이는 좁게
-        const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+        const l = lumOf(d[i], d[i + 1], d[i + 2]);
         const dc = Math.hypot(d[i] - l - (med[0] - lumM), d[i + 1] - l - (med[1] - lumM), d[i + 2] - l - (med[2] - lumM));
-        const near = dc < 40 && l > lumM * 0.45 - 6 && l < lumM * 1.8 + 25;
-        bd[i + 3] = near ? d[i + 3] : 0;
+        bd[i + 3] = dc < 40 && l > lumM * 0.45 - 6 && l < lumM * 1.8 + 25 ? d[i + 3] : 0;
       }
       bg2.putImageData(bi, 0, 0);
     }
     let lo = base;
     while (lo.width > cw / 12 && lo.width > 8) {
-      const h2 = document.createElement('canvas'); h2.width = Math.max(4, lo.width >> 1); h2.height = Math.max(4, lo.height >> 1);
+      const h2 = mk(Math.max(4, lo.width >> 1), Math.max(4, lo.height >> 1));
       const hg = h2.getContext('2d'); hg.imageSmoothingQuality = 'high'; hg.drawImage(lo, 0, 0, h2.width, h2.height); lo = h2;
     }
-    const up = document.createElement('canvas'); up.width = cw; up.height = ch;
-    const ug = up.getContext('2d', { willReadFrequently: true }); ug.imageSmoothingQuality = 'high'; ug.drawImage(lo, 0, 0, cw, ch);
+    const upc = mk(cw, ch), ug = upc.getContext('2d', { willReadFrequently: true }); ug.imageSmoothingQuality = 'high'; ug.drawImage(lo, 0, 0, cw, ch);
     const L = ug.getImageData(0, 0, cw, ch).data;
-    const lum = (r, g2, b) => 0.2126 * r + 0.7152 * g2 + 0.0722 * b;
-    const Lref = Math.max(4, lum(...med));
-    for (let i = 0; i < d.length; i += 4) {
-      const a = d[i + 3] / 255, la = L[i + 3] / 255;
-      // 넓은 명암: 옷이 아닌 곳에 가까우면 중앙값 쪽으로
-      const lf = la > 0.04 ? [L[i], L[i + 1], L[i + 2]] : med;
-      const gain = Math.min(1.7, Math.max(0.6, Math.pow(Lref / Math.max(4, lum(...lf)), 0.7)));
-      // 메움색: 넓은 평균색을 중앙값 밝기로(투명한 곳 가장자리에 배경·살이 번지지 않게)
-      const fk = Lref / Math.max(4, lum(...lf));
-      for (let ch2 = 0; ch2 < 3; ch2++) {
-        const fill = Math.min(255, lf[ch2] * fk) * Math.min(1, la * 2) + med[ch2] * (1 - Math.min(1, la * 2));
-        d[i + ch2] = Math.min(255, d[i + ch2] * gain) * a + fill * (1 - a);
-      }
-      d[i + 3] = 255;
+    const Lref = Math.max(4, lumM);
+    // 평평하게 + 무늬 판정
+    const flat = new Float32Array(N * 3), raw = new Uint8Array(N), gar = new Uint8Array(N), dcA = new Float32Array(N), relA = new Float32Array(N), skA = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      const j = i * 4, a = d[j + 3] / 255, la = L[j + 3] / 255;
+      // 흐린 바탕색은 덮인 비율(la)이 작으면 8비트 반올림 오차가 커서(줄무늬 가운데 가는 선) 중앙값 쪽으로
+      const tl = Math.min(1, Math.max(0, (la - 0.1) / 0.3));
+      const lf = [med[0] + (L[j] - med[0]) * tl, med[1] + (L[j + 1] - med[1]) * tl, med[2] + (L[j + 2] - med[2]) * tl];
+      const Lf = Math.max(4, lumOf(...lf));
+      const gain = Math.min(1.7, Math.max(0.6, Math.pow(Lref / Lf, 0.7)));
+      // 채도 15% 올림: 영화 톤매핑(ACES)이 밝은 색의 채도를 깎아 하늘색 줄이 회백색으로 보이던 것 보정
+      const lg = lumOf(d[j], d[j + 1], d[j + 2]);
+      for (let q = 0; q < 3; q++) flat[i * 3 + q] = Math.max(0, Math.min(255, (lg + (d[j + q] - lg) * 1.15) * gain));
+      if (a < 0.5) continue;
+      gar[i] = 1;
+      const l = lumOf(d[j], d[j + 1], d[j + 2]), dl = l - Lf;
+      const dc = Math.hypot(d[j] - l - (lf[0] - Lf), d[j + 1] - l - (lf[1] - Lf), d[j + 2] - l - (lf[2] - Lf)) / 255;
+      const rel = Math.abs(dl) / Math.max(Lf, 25);
+      raw[i] = dc > 0.07 || (Math.abs(dl) > 30 && rel > 0.4) ? 1 : 0;
+      dcA[i] = dc; relA[i] = rel;
+      const r0 = d[j], g0 = d[j + 1], b0 = d[j + 2];
+      skA[i] = r0 > 95 && g0 > 40 && b0 > 45 && r0 > g0 && r0 > b0 && r0 - Math.min(g0, b0) > 15 && r0 - g0 > 12 ? 1 : 0; // 살색 근처
     }
-    g.putImageData(im, 0, 0);
-    const map = new THREE.CanvasTexture(c);
-    map.colorSpace = THREE.SRGBColorSpace; map.anisotropy = 4;
-    map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
-    const out = {
-      medHex, map, canvas: c,
+    // 모델 사진: 몸판 띠 맨 아래 5%(벨트·손·배경이 섞이는 곳)는 무늬로 보지 않는다
+    if (tex.kind === 'model' && rb.torso?.length) {
+      const t0 = P2(rb.torso[0][0])[1], t1 = P2(rb.torso[rb.torso.length - 1][0])[1];
+      const cut = Math.round(t1 - (t1 - t0) * 0.05);
+      for (let y = Math.max(0, cut); y < ch; y++) raw.fill(0, y * cw, (y + 1) * cw);
+    }
+    // 잡티 지우기: 3x3 다수결 → 연결 덩어리 중 작은 것 버리기
+    const m1 = new Uint8Array(N);
+    for (let y = 1; y < ch - 1; y++) for (let x = 1; x < cw - 1; x++) {
+      let s = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) s += raw[(y + dy) * cw + x + dx];
+      m1[y * cw + x] = s >= 5 ? 1 : 0;
+    }
+    const lab = new Int32Array(N), comps = [], stack = new Int32Array(N);
+    const minA = Math.max(30, N * 0.0006);
+    for (let i0 = 0; i0 < N; i0++) {
+      if (!m1[i0] || lab[i0]) continue;
+      const id = comps.length + 1; let sp = 0, area = 0, bx0 = cw, bx1 = 0, by0 = ch, by1 = 0, sdc = 0, srel = 0, ssk = 0;
+      stack[sp++] = i0; lab[i0] = id;
+      while (sp) {
+        const i = stack[--sp], x = i % cw, y = (i / cw) | 0; area++; sdc += dcA[i]; srel += relA[i]; ssk += skA[i];
+        if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y;
+        if (x > 0 && m1[i - 1] && !lab[i - 1]) { lab[i - 1] = id; stack[sp++] = i - 1; }
+        if (x < cw - 1 && m1[i + 1] && !lab[i + 1]) { lab[i + 1] = id; stack[sp++] = i + 1; }
+        if (y > 0 && m1[i - cw] && !lab[i - cw]) { lab[i - cw] = id; stack[sp++] = i - cw; }
+        if (y < ch - 1 && m1[i + cw] && !lab[i + cw]) { lab[i + cw] = id; stack[sp++] = i + cw; }
+      }
+      comps.push({ area, x0: bx0, x1: bx1, y0: by0, y1: by1, keep: area >= minA && (Math.min(bx1 - bx0, by1 - by0) >= cw * 0.025 || bx1 - bx0 > cw * 0.5)
+        // 색 차이 없이 조금 어둡거나 밝기만 한 덩어리(사진 주름 그늘)·살색 덩어리(손)는 무늬 아님
+        && (sdc / area > 0.08 || srel / area > 0.78) && ssk / area < 0.4 }); // 가는 조각(주름 그늘)은 무늬 아님, 옷 폭 절반 넘는 가로줄은 무늬
+    }
+    // 모델 사진: 옷 옆 가장자리에 붙은 덩어리는 손·팔·벨트(무늬 아님)
+    if (tex.kind === 'model') {
+      const edgeAt = (y) => { let a2 = -1, b2 = -1; for (let x = 0; x < cw; x++) if (d[(y * cw + x) * 4 + 3] > 127) { if (a2 < 0) a2 = x; b2 = x; } return [a2, b2]; };
+      for (const q of comps) {
+        if (!q.keep) continue;
+        const [ea, eb] = edgeAt((q.y0 + q.y1) >> 1), mg = (eb - ea) * 0.04;
+        if (ea >= 0 && q.x1 - q.x0 < (eb - ea) * 0.6 && (q.x0 <= ea + mg || q.x1 >= eb - mg)) q.keep = false; // 옷 폭을 거의 덮는 가로줄은 그대로
+      }
+    }
+    const pm = new Float32Array(N);
+    for (let i = 0; i < N; i++) if (lab[i] && comps[lab[i] - 1].keep) pm[i] = 1;
+    // 줄마다 옷 폭 중 무늬가 덮는 비율 → 70% 넘는 줄은 옆·뒤로 둘러 그릴 줄
+    const full = new Uint8Array(ch);
+    let nFull = 0;
+    for (let y = 0; y < ch; y++) {
+      let ga = 0, pa = 0;
+      for (let x = 0; x < cw; x++) { const i = y * cw + x; if (gar[i]) { ga++; if (pm[i]) pa++; } }
+      if (ga > 20 && pa / ga > 0.7) { full[y] = 1; nFull++; }
+    }
+    // 무늬 가장자리 1px 부드럽게
+    const soft = new Float32Array(N);
+    for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+      let s = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= cw || yy >= ch) continue; s += pm[yy * cw + xx]; n++; }
+      soft[y * cw + x] = Math.max(pm[y * cw + x], s / n);
+    }
+    const out = new Uint8ClampedArray(N * 4), wrapOut = new Uint8ClampedArray(N * 4);
+    for (let i = 0; i < N; i++) {
+      const s = soft[i], sw = s * full[(i / cw) | 0];
+      for (let q = 0; q < 3; q++) {
+        out[i * 4 + q] = med[q] + (flat[i * 3 + q] - med[q]) * s;
+        wrapOut[i * 4 + q] = med[q] + (flat[i * 3 + q] - med[q]) * sw;
+      }
+      out[i * 4 + 3] = wrapOut[i * 4 + 3] = 255;
+    }
+    // 덩어리(로고·글자): 줄무늬처럼 옷 폭을 거의 덮는 것은 빼고, 비율을 맞춰 다시 그릴 대상
+    const garW = (y) => { let a = cw, b = -1; for (let x = 0; x < cw; x++) if (gar[y * cw + x]) { if (x < a) a = x; b = x; } return b - a; };
+    const blobs = comps.filter((q) => q.keep && q.x1 - q.x0 < 0.75 * Math.max(1, garW((q.y0 + q.y1) >> 1)));
+    // 소매 무늬가 있나(소매 띠 안 무늬 비율 3% 넘으면)
+    let sleevePrint = false;
+    const sl = (rb.sleeves || []).filter((v) => v?.ribbon).map((v) => fixRows(v.ribbon));
+    if (sl.length) {
+      const sm2 = polyMask(sl); let a = 0, p = 0;
+      for (let i = 0; i < N; i++) if (sm2[i] && gar[i]) { a++; if (pm[i]) p++; }
+      sleevePrint = a > 50 && p / a > 0.03;
+    }
+    const res = {
+      medHex, cw, ch, out, wrapOut, blobs, hasWrap: nFull >= ch * 0.03, sleevePrint, maps: new Map(), med3: med,
       med: new THREE.Color(...med.map((v) => v / 255)).convertSRGBToLinear(),
       toUV: (p) => [(p.x - x0) / bw, 1 - (p.y - y0) / bh],
     };
-    printCache.set(tex.texture, out);
-    return out;
+    printCache.set(tex.texture, res);
+    return res;
+  }
+
+  // 무늬 그림 텍스처(몸판 좌표의 세로/가로 축척비 ratio별). 로고 덩어리는 세로를 ratio배로 다시 그려
+  // 3D에서 원래 가로세로 비율이 되게 한다(띠 줄마다 다시 샘플링하지 않고 덩어리 하나를 한 번의 확대로: 찌그러진 원·깨진 글자 방지)
+  function printMaps(pb, ratio) {
+    const key = Math.round(ratio * 50) / 50;
+    if (pb.maps.has(key)) return pb.maps.get(key);
+    const mkTex = (arr, warp) => {
+      const c = document.createElement('canvas'); c.width = pb.cw; c.height = pb.ch;
+      const g = c.getContext('2d');
+      g.putImageData(new ImageData(arr.slice(), pb.cw, pb.ch), 0, 0);
+      if (warp && Math.abs(key - 1) > 0.03) {
+        g.imageSmoothingQuality = 'high';
+        const medCss = `rgb(${pb.med3.join(',')})`;
+        const parts = pb.blobs.map((q) => {
+          const m = 3, bx = Math.max(0, q.x0 - m), by = Math.max(0, q.y0 - m), w = Math.min(pb.cw - bx, q.x1 - q.x0 + 1 + 2 * m), h = Math.min(pb.ch - by, q.y1 - q.y0 + 1 + 2 * m);
+          const t = document.createElement('canvas'); t.width = w; t.height = h; t.getContext('2d').drawImage(c, bx, by, w, h, 0, 0, w, h);
+          return { t, bx, by, w, h };
+        });
+        g.fillStyle = medCss;
+        for (const p of parts) g.fillRect(p.bx, p.by, p.w, p.h);
+        for (const p of parts) { const nh = p.h * key; g.drawImage(p.t, p.bx, p.by + p.h / 2 - nh / 2, p.w, nh); }
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+      return t;
+    };
+    const r = { map: mkTex(pb.out, true), wrap: pb.hasWrap ? mkTex(pb.wrapOut, false) : null };
+    pb.maps.set(key, r);
+    return r;
   }
 
   // 띠(ribbon) 안의 한 점: rows[k] = [왼쪽 점, 오른쪽 점](사진 좌표), t는 줄 번호(소수), s는 왼→오 0~1
@@ -883,22 +1036,25 @@ float armParam(vec3 p) {
     return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
   }
 
-  // 옷 정점(원래 자세 좌표)마다 상품 그림 좌표와 무늬 비율(앞을 볼수록 1, 옆·뒤는 0 → 중앙값 색)
-  // spec: { kind: 'top'|'bottom', rows(사진 띠), map(3D 높이 → 줄 번호), legs, sleeves, sleeveLen, crotchY }
+  // 옷 정점(원래 자세 좌표)마다 상품 그림 좌표 2벌과 비율
+  // - 상의 몸판: 한 번의 확대·이동(가로 kx, 세로 ky px/cm). 가로 좌표는 모델 사진이면 x(정면 투영), 펼친 사진이면
+  //   가슴 타원 단면의 둘레 길이(펼친 폭 = 앞 반 둘레). 세로는 목 옆 어깨 → 밑단 비율 그대로(줄무늬 시작 위치 유지)
+  // - 둘러 그리기(uv2): 앞 가운데에서 잰 둘레 길이를 뒤 가운데에서 거울처럼 접어(이음매 없이) 옆·뒤까지
+  // - 소매: 소매에 무늬가 있을 때만 소매 띠 대응, 바지: 허리 띠·다리 띠 대응
+  // spec: { kind, rows, flat, model, top3, hemOf(e), sleeves, sleeveLen(e), sleevePrint, legs, map, legMap, crotchY, wrap, onRatio }
   function printMapper(pt, spec, cmP) {
     spec = { ...spec, rows: fixRows(spec.rows), legs: spec.legs?.map((r) => (r ? fixRows(r) : r)), sleeves: spec.sleeves?.map((r) => (r ? fixRows(r) : r)) };
     const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    const med = (a) => { const b = a.filter((v) => isFinite(v)).sort((p, q) => p - q); return b.length ? b[b.length >> 1] : NaN; };
     return (R, Nn, used, isArm, n, ext0) => {
       const sleeveLen = spec.sleeveLen ? spec.sleeveLen(ext0) : 0;
-      const uv = new Float32Array(n * 2), w = new Float32Array(n), done = new Uint8Array(n);
+      const uv = new Float32Array(n * 2), w = new Float32Array(n), uv2 = new Float32Array(n * 2), w2 = new Float32Array(n), done = new Uint8Array(n);
       const nz = new Float32Array(n);
       for (let i = 0; i < n; i++) { const l = Math.hypot(Nn[i * 3], Nn[i * 3 + 1], Nn[i * 3 + 2]) || 1; nz[i] = Nn[i * 3 + 2] / l; }
-      // 1cm 높이 칸마다 앞을 보는 정점의 왼·오 끝(무리: 몸통 0, 왼다리 1, 오른다리 2)
       const grp = (i) => (spec.kind === 'bottom' && R[i * 3 + 1] < spec.crotchY ? (R[i * 3] < 0 ? 1 : 2) : 0);
-      // ext: 앞을 보는 정점의 x 범위(사진이 정면 투영인 모델 사진용), extA: 칸 전체의 x·z 범위(바닥에 펼친 사진용 둘레 길이)
+      // ext: 앞을 보는 정점의 x 범위, extA: 칸 전체의 x·z 범위(몸통은 어깨 관절 x 안쪽만: 겨드랑이 높이 소매 밑면 빼기)
       const ext = new Map(), extA = new Map();
       const put = (M, key, v) => { const e = M.get(key); if (!e) M.set(key, v.flatMap((q) => [q, q])); else v.forEach((q, j) => { e[j * 2] = Math.min(e[j * 2], q); e[j * 2 + 1] = Math.max(e[j * 2 + 1], q); }); };
-      // 몸통은 어깨 관절 x 안쪽만(겨드랑이 높이의 소매 밑면 정점이 팔로 안 잡혀 폭을 부풀린다)
       const shX = Math.abs(jpos(cmP, 'upperarm01.L____head')[0]);
       for (let i = 0; i < n; i++) {
         if (!used[i] || isArm[i]) continue;
@@ -907,8 +1063,7 @@ float armParam(vec3 p) {
         put(extA, key, [R[i * 3], R[i * 3 + 2]]);
         if (nz[i] >= 0.15) put(ext, key, [R[i * 3]]);
       }
-      // 위아래 여러 칸을 합친 범위(최소의 최소·최대의 최대): 옷 메시가 성겨서 1cm 칸 하나에는 옆선 정점이 없기 일쑤라
-      // 칸마다 재면 폭이 작게·들쭉날쭉 잡혀 무늬가 옆으로 늘어나고 둥근 로고가 레몬처럼 꺾인다(몸통 ±4cm, 다리 ±3cm)
+      // 위아래 여러 칸을 합친 범위: 옷 메시가 성겨 1cm 칸 하나에는 옆선 정점이 없기 일쑤
       const extAt = (gq, y, M = ext) => {
         const R0 = gq ? 3 : 4;
         let acc = null;
@@ -920,24 +1075,69 @@ float armParam(vec3 p) {
         for (let dy = R0 + 1; dy < 40; dy++) for (const sgn of [-1, 1]) { const e = M.get(gq * 10000 + Math.round(y) + dy * sgn); if (e) return e; }
         return null;
       };
-      // 타원 단면 둘레 길이(앞 가운데 0에서 각도 f까지): 펼친 옷 폭 = 앞 반 둘레
-      const arcTo = (hw, hd, f) => { let a = 0; const N = 12, h = f / N; for (let k = 0; k < N; k++) { const q = (k + 0.5) * h; a += Math.hypot(hw * Math.cos(q), hd * Math.sin(q)) * h; } return a; };
+      const arcTo = (hw, hd, f) => { let a = 0; const K = 12, h = f / K; for (let q = 0; q < K; q++) { const t = (q + 0.5) * h; a += Math.hypot(hw * Math.cos(t), hd * Math.sin(t)) * h; } return a; };
       const arm = {};
       for (const sd of ['L', 'R']) {
         const sh = jpos(cmP, `upperarm01.${sd}____head`), ax = nrm3(sub3(jpos(cmP, `wrist.${sd}____head`), sh));
         let dx = -ax[1], dy = ax[0]; if (dx < 0) { dx = -dx; dy = -dy; } const dl = Math.hypot(dx, dy) || 1;
         arm[sd] = { sh, ax, d: [dx / dl, dy / dl, 0] };
       }
+      // 상의 몸판 한 번의 확대·이동 값
+      let T = null;
+      if (spec.kind === 'top') {
+        const top3 = spec.top3, hem3 = spec.hemOf(ext0);
+        const ys = []; for (let y = Math.ceil(hem3 + 4); y <= top3 - 10; y++) ys.push(y);
+        const hw = med(ys.map((y) => { const e = extAt(0, y, extA); return e ? (e[1] - e[0]) / 2 : NaN; }));
+        const hd = med(ys.map((y) => { const e = extAt(0, y, extA); return e ? (e[3] - e[2]) / 2 : NaN; }));
+        const cz = med(ys.map((y) => { const e = extAt(0, y, extA); return e ? (e[3] + e[2]) / 2 : NaN; }));
+        const wF = med(ys.map((y) => { const e = extAt(0, y); return e ? e[1] - e[0] : NaN; }));
+        const rows = spec.rows, K1 = spec.model ? Math.min(5, rows.length - 1) : 0;
+        const wP = med(rows.slice(K1).map((r) => r[1].x - r[0].x)), cxP = med(rows.slice(K1).map((r) => (r[0].x + r[1].x) / 2));
+        const topP = (rows[0][0].y + rows[0][1].y) / 2, hemP = (rows[rows.length - 1][0].y + rows[rows.length - 1][1].y) / 2;
+        // 몸통 단면 모양(가슴~배 높이 정점들): x 1cm 칸마다 앞(z 최대)·뒤(z 최소) → 앞 가운데에서 잰 둘레 길이 표.
+        // 타원으로 근사하면 평평한 가슴 앞이 둥글게 계산돼 무늬가 옆으로 늘어난다
+        // 옷 메시가 성겨(정점 간격 3~4cm) 칸마다 앞·뒤를 보는 정점의 z 평균을 모으고, 빈 칸은 이웃 칸으로 잇는다
+        const NB = Math.ceil(hw) + 2, sf = new Float32Array(NB), nf = new Float32Array(NB), sb = new Float32Array(NB), nbk = new Float32Array(NB);
+        for (let i = 0; i < n; i++) {
+          if (!used[i] || isArm[i] || R[i * 3 + 1] < hem3 + 6 || R[i * 3 + 1] > top3 - 14) continue;
+          const ax = Math.abs(R[i * 3]), zz = R[i * 3 + 2];
+          // 가까운 두 칸에 나눠 담기(삼각 가중)
+          const q0 = Math.floor(ax), f = ax - q0;
+          for (const [q, wq] of [[q0, 1 - f], [q0 + 1, f]]) {
+            if (q >= NB) continue;
+            if (nz[i] > 0.25) { sf[q] += zz * wq; nf[q] += wq; } else if (nz[i] < -0.25) { sb[q] += zz * wq; nbk[q] += wq; }
+          }
+        }
+        const prof = (S, Nw, dflt) => {
+          const A = new Float32Array(NB).fill(NaN);
+          for (let q = 0; q < NB; q++) {
+            // 위아래(±2칸) 합쳐 평균: 빈 칸 줄이기
+            let a = 0, c = 0; for (let d2 = -2; d2 <= 2; d2++) { const qq = q + d2; if (qq < 0 || qq >= NB) continue; const wq = 1 / (1 + Math.abs(d2)); a += S[qq] * wq; c += Nw[qq] * wq; }
+            if (c > 0.3) A[q] = a / c;
+          }
+          let last = NaN; for (let q = 0; q < NB; q++) { if (isNaN(A[q])) A[q] = last; else last = A[q]; }
+          for (let q = NB - 1; q >= 0; q--) if (isNaN(A[q])) A[q] = isNaN(A[q + 1]) || q === NB - 1 ? dflt : A[q + 1];
+          return A;
+        };
+        const zf = prof(sf, nf, cz + hd), zb = prof(sb, nbk, cz - hd);
+        const cum = (A) => { const o = new Float32Array(NB); for (let q = 1; q < NB; q++) o[q] = o[q - 1] + Math.hypot(1, A[q] - A[q - 1]); return o; };
+        const Af = cum(zf), Ab = cum(zb);
+        const at = (A, ax) => { const q = Math.min(NB - 1.001, Math.max(0, ax)), q0 = Math.floor(q); return A[q0] + (A[q0 + 1] - A[q0]) * (q - q0); };
+        // 앞 반 둘레 = 앞 가운데 → 옆(hw)까지 + 옆선(앞·뒤 가운데 높이)까지 내려가는 옆면
+        const half = at(Af, hw) + Math.abs(at(zf, hw) - (at(zf, hw) + at(zb, hw)) / 2);
+        const kxArc = wP / (2 * half);
+        const kx = spec.model ? wP / Math.max(5, wF) : kxArc, ky = (hemP - topP) / Math.max(5, top3 - hem3);
+        T = { top3, hw, hd: Math.max(1, hd), cz, half, kx, kxArc, ky, wP, cxP, topP, Af, Ab, zf, zb, at };
+        spec.onRatio(ky / kx);
+      }
       for (let i = 0; i < n; i++) {
         if (!used[i]) continue;
         const x = R[i * 3], y = R[i * 3 + 1], z = R[i * 3 + 2];
-        let p = null, s = 0.5;
-        // 소매 띠가 없는 팔 정점(바닥에 펼친 사진 등)은 몸판 좌표로 이어 두고 무늬 비율만 0
-        // (좌표가 비면 0,0이 되어 이웃 삼각형 안에서 그림 전체를 훑는 무지개 줄이 생긴다)
-        let wk = 1;
+        let p = null, s = 0.5, wk = 1, ef = 0.07;
+        // 소매: 무늬가 있을 때만 소매 띠 대응(없으면 몸판 좌표를 이어 두고 비율 0: 좌표가 비면 삼각형 안에서 그림을 훑는 줄이 생긴다)
         if (isArm[i]) {
           const rib = spec.sleeves?.[x < 0 ? 0 : 1];
-          if (rib && sleeveLen) {
+          if (rib && sleeveLen && spec.sleevePrint) {
             const A = arm[x > 0 ? 'L' : 'R'];
             const ox = x - A.sh[0], oy = y - A.sh[1], oz = z - A.sh[2];
             const t = ox * A.ax[0] + oy * A.ax[1] + oz * A.ax[2];
@@ -945,32 +1145,42 @@ float armParam(vec3 p) {
             const pl = Math.hypot(px, py, pz) || 1;
             s = 0.5 + 0.5 * (px * A.d[0] + py * A.d[1]) / pl;
             p = ribbonPoint(rib, (t / sleeveLen) * (rib.length - 1), s);
+            wk = 0.8; ef = 0.22;
           } else wk = 0;
         }
-        if (!p) {
+        let q2 = null, ww2 = 0;
+        if (!p && T) {
+          // 몸판(상의): 단면 표에서 앞 가운데(또는 뒤 가운데)부터 잰 둘레 길이
+          const ax = Math.abs(x), sg = Math.sign(x) || 1;
+          const front = z >= (T.at(T.zf, ax) + T.at(T.zb, ax)) / 2;
+          const af = T.at(T.Af, ax), ab = T.at(T.Ab, ax);
+          const u = spec.model ? x : sg * af;
+          const Y = T.topP + (T.top3 - y) * T.ky;
+          p = { x: T.cxP + u * T.kx, y: Y };
+          s = 0.5 + (u * T.kx) / T.wP;
+          // 둘러 그리기: 뒤는 뒤 가운데에서 잰 길이(앞·뒤가 옆선에서 가로로 조금 어긋나도 줄무늬는 가로로 같아 보이지 않는다)
+          const aw = front ? af : ab;
+          const X2 = T.cxP + Math.max(-0.45 * T.wP, Math.min(0.45 * T.wP, sg * aw * T.kxArc));
+          q2 = pt.toUV({ x: X2, y: Y });
+          ww2 = spec.wrap && !isArm[i] ? 1 : 0;
+        } else if (!p) {
           const gq = grp(i);
+          const e = spec.flat ? extAt(gq, y, extA) : extAt(gq, y);
+          if (!e || e[1] - e[0] < 1) continue;
           if (spec.flat) {
-            const e = extAt(gq, y, extA);
-            if (!e || e[1] - e[0] < 1) continue;
             const hw = (e[1] - e[0]) / 2, hd = Math.max(1, (e[3] - e[2]) / 2), cx = (e[0] + e[1]) / 2, cz = (e[2] + e[3]) / 2;
             const f = Math.atan2(Math.max(-1, Math.min(1, (x - cx) / hw)), Math.max(0, (z - cz) / hd));
             s = 0.5 + 0.5 * Math.sign(f) * arcTo(hw, hd, Math.abs(f)) / arcTo(hw, hd, Math.PI / 2);
-          } else {
-            const e = extAt(gq, y);
-            if (!e || e[1] - e[0] < 1) continue;
-            s = Math.min(1, Math.max(0, (x - e[0]) / (e[1] - e[0])));
-          }
+          } else s = Math.min(1, Math.max(0, (x - e[0]) / (e[1] - e[0])));
           if (gq === 0) p = ribbonPoint(spec.rows, spec.map(y, ext0), s);
           else { const rib = spec.legs?.[gq - 1]; if (!rib) continue; p = ribbonPoint(rib, spec.legMap(y, ext0) * (rib.length - 1), s); }
         }
         if (!p) continue;
         const q = pt.toUV(p);
         uv[i * 2] = q[0]; uv[i * 2 + 1] = q[1]; done[i] = 1;
-        // 앞을 볼수록 무늬, 옆으로 돌아갈수록 중앙값(옆선에서 자연스럽게 섞이게), 사진 띠 가장자리(배경이 번진 곳)는 약하게
-        // 소매는 사진 속 팔 띠가 좁고 가장자리가 접혀 있어 옆쪽이 길게 늘어난 줄로 보인다 → 가장자리를 넓게 덜어 낸다
-        // 사진 속 소매는 팔 주름·그늘이 무늬보다 커서 절반만 섞는다(소매 로고·줄무늬는 옅게라도 보이게)
-        const ef = isArm[i] ? 0.22 : 0.07;
-        w[i] = wk * (isArm[i] ? 0.5 : 1) * sm(0.12, 0.5, nz[i]) * sm(0, ef, s) * sm(1, 1 - ef, s);
+        const r2 = q2 || q; uv2[i * 2] = r2[0]; uv2[i * 2 + 1] = r2[1]; w2[i] = ww2;
+        // 앞을 볼수록 사진 무늬(옆은 둘러 그린 줄무늬 또는 중앙값 색으로 부드럽게), 사진 띠 가장자리는 약하게
+        w[i] = wk * sm(0.12, 0.5, nz[i]) * sm(0, ef, s) * sm(1, 1 - ef, s);
       }
       // 그래도 좌표가 없는 정점은 가장 가까운 정점의 좌표(무늬 비율 0)
       const have = []; for (let i = 0; i < n; i++) if (done[i]) have.push(i);
@@ -978,9 +1188,9 @@ float armParam(vec3 p) {
         if (!used[i] || done[i] || !have.length) continue;
         let best = have[0], bd = Infinity;
         for (let j = 0; j < have.length; j += 3) { const q = have[j]; const dd = (R[q * 3] - R[i * 3]) ** 2 + (R[q * 3 + 1] - R[i * 3 + 1]) ** 2 + (R[q * 3 + 2] - R[i * 3 + 2]) ** 2; if (dd < bd) { bd = dd; best = q; } }
-        uv[i * 2] = uv[best * 2]; uv[i * 2 + 1] = uv[best * 2 + 1];
+        uv[i * 2] = uv2[i * 2] = uv[best * 2]; uv[i * 2 + 1] = uv2[i * 2 + 1] = uv[best * 2 + 1];
       }
-      return { uv, w };
+      return { uv, w, uv2, w2 };
     };
   }
 
@@ -1044,19 +1254,18 @@ float armParam(vec3 p) {
       };
       const zcT = jpos(cmP, 'spine03____head')[2];
       const radialT = (x, y, z) => (armParamJS(X.cmP, x, y, z) >= 0 ? 0 : Math.min(1, Math.max(0, (neckY - 4 - y) / 8)));
-      // 상품 무늬: 몸판은 목 옆 어깨 → 겨드랑이 → 밑단(사진 띠 0 → 4 → 끝), 소매는 어깨 관절부터 소매 끝까지
+      // 상품 무늬: 몸판은 한 번의 확대·이동(목 옆 어깨 → 밑단 비율), 소매는 무늬가 있을 때만 소매 띠
       const tx = outfit.top.tex, rows = tx?.category === 'top' ? tx.ribbons?.torso : null;
-      const pt = rows?.length > 2 ? printTexture(tx, outfit.top.color) : null;
-      let printFn = null;
-      if (pt) {
-        const shY = jpos(cmP, 'upperarm01.L____head')[1], hipY = jpos(cmP, 'upperleg01.L____head')[1];
-        const top3 = hps - 1, pit3 = shY - 0.28 * (shY - hipY);
-        const nr = rows.length - 1, K1 = tx.kind === 'model' ? 4 : 0;
-        const hemOf = (e) => Math.max(U.uHem.value, e.yMin); // 실제로 잘리는 밑단
-        const map = K1 ? (y, e) => (y >= pit3 ? K1 * (top3 - y) / (top3 - pit3) : K1 + (nr - K1) * (pit3 - y) / Math.max(1, pit3 - hemOf(e)))
-          : (y, e) => nr * (top3 - y) / Math.max(1, top3 - hemOf(e));
+      const pb = rows?.length > 2 ? printBase(tx, outfit.top.color) : null;
+      let printFn = null, pt = null;
+      if (pb) {
+        pt = { mapU: { value: null }, wrapU: { value: null }, med: pb.med, toUV: pb.toUV };
         const sl = tx.ribbons.sleeves?.map((v) => v?.ribbon || null);
-        printFn = printMapper(pt, { kind: 'top', flat: tx.kind === 'flat', rows, map, sleeves: sl, sleeveLen: (e) => Math.min(U.uSleeve.value, e.sMax) }, cmP);
+        printFn = printMapper(pt, {
+          kind: 'top', model: tx.kind === 'model', rows, top3: hps - 1, hemOf: (e) => Math.max(U.uHem.value, e.yMin),
+          sleeves: sl, sleevePrint: pb.sleevePrint, sleeveLen: (e) => Math.min(U.uSleeve.value, e.sMax), wrap: pb.hasWrap,
+          onRatio: (r) => { const m = printMaps(pb, r); pt.mapU.value = m.map; pt.wrapU.value = m.wrap || m.map; },
+        }, cmP);
       }
       const mat = clothMaterial('top', { color: outfit.top.color, map: C.tex[it.name + '_ao.jpg'], bump: knitTex(), print: pt }, U);
       U.uZc.value = zcT;
@@ -1083,11 +1292,13 @@ float armParam(vec3 p) {
         const blend = Math.min(1, Math.max(0, (crotchY + 3 - y) / 6));
         return wE * (1 - blend) + (tE * (1 - tt) + hE * tt) * blend;
       };
-      // 상품 무늬(데님 워싱 등): 허리 띠 0~6줄 = 허리선~가랑이, 다리 띠 = 가랑이~밑단
+      // 상품 무늬: 허리 띠 0~6줄 = 허리선~가랑이, 다리 띠 = 가랑이~밑단(민무늬 데님은 중앙값 색 + 데님 결)
       const tx = outfit.bottom.tex, rows = tx?.category === 'bottom' ? tx.ribbons?.waist : null;
-      const pt = rows?.length > 6 ? printTexture(tx, outfit.bottom.color) : null;
-      let printFn = null;
-      if (pt) {
+      const pb = rows?.length > 6 ? printBase(tx, outfit.bottom.color) : null;
+      let printFn = null, pt = null;
+      if (pb) {
+        const m0 = printMaps(pb, 1);
+        pt = { mapU: { value: m0.map }, wrapU: { value: m0.map }, med: pb.med, toUV: pb.toUV };
         const wt3 = waist - 0.5;
         printFn = printMapper(pt, {
           kind: 'bottom', flat: tx.kind === 'flat', rows, crotchY, legs: tx.ribbons.legs?.map((v) => v?.ribbon || null),
@@ -1095,7 +1306,7 @@ float armParam(vec3 p) {
           legMap: (y, e) => (crotchY - y) / Math.max(1, crotchY - Math.max(U.uPHem.value, e.yMin)),
         }, cmP);
       }
-      const mat = clothMaterial('bottom', { color: outfit.bottom.color, map: C.tex['jeans_d.jpg'], normalMap: C.tex['jeans_n.jpg'], print: pt }, U);
+      const mat = clothMaterial('bottom', { color: outfit.bottom.color, keepHue: true, map: C.tex['jeans_d.jpg'], normalMap: C.tex['jeans_n.jpg'], print: pt }, U);
       const zcB = jpos(cmP, 'upperleg01.L____head')[2];
       const mesh = clothMesh(it, P, cmP, ease, mat, null, (x, y) => Math.min(1, Math.max(0, (y - crotchY) / 4)), zcB, printFn);
       U.uWaistM.value = mesh.userData.ext.yMax; U.uPHemM.value = mesh.userData.ext.yMin;
@@ -1298,8 +1509,8 @@ float armParam(vec3 p) {
             float line = uClav.y + 0.1 * ax - 0.004 * ax * ax;
             float d = line - vRest.y;
             float frontC = smoothstep(uClav.z - 4.0, uClav.z + 2.0, vRest.z) * (1.0 - smoothstep(13.0, 16.0, ax)) * smoothstep(1.5, 3.0, ax);
-            // 턱 밑 목 앞쪽 그늘, 가슴 아래 옅은 그늘, 무릎·팔꿈치 혈색 3%
-            float jaw = (1.0 - smoothstep(0.0, 4.0, uChin.y - vRest.y)) * step(vRest.y, uChin.y) * (1.0 - smoothstep(4.0, 7.0, ax)) * smoothstep(uChin.z - 3.0, uChin.z + 1.0, vRest.z);
+            // 턱 밑 목 앞쪽 그늘(턱 높이에서 1.5cm에 걸쳐 서서히: 딱 잘리면 목에 가로선), 가슴 아래 옅은 그늘, 무릎·팔꿈치 혈색 3%
+            float jaw = (1.0 - smoothstep(1.0, 5.0, uChin.y - vRest.y)) * smoothstep(-0.5, 1.0, uChin.y - vRest.y) * (1.0 - smoothstep(4.0, 7.0, ax)) * smoothstep(uChin.z - 3.0, uChin.z + 1.0, vRest.z);
             diffuseColor.rgb *= 1.0 - 0.12 * jaw;
             float pec = smoothstep(0.0, 1.2, uNip - 2.5 - vRest.y) * (1.0 - smoothstep(1.2, 3.5, uNip - 2.5 - vRest.y)) * smoothstep(3.0, 6.0, ax) * (1.0 - smoothstep(12.0, 15.0, ax)) * smoothstep(uClav.z - 2.0, uClav.z + 4.0, vRest.z);
             diffuseColor.rgb *= 1.0 - 0.07 * pec;
@@ -1361,7 +1572,7 @@ float armParam(vec3 p) {
     for (const p of data.proxies) {
       if (p.kind === 'hair' && p.name !== hairName) continue;
       const PP = proxyPos(p, P, p.kind === 'hair' ? POSE.hairThick : 1); // 머리카락은 두피에 더 붙여 헬멧처럼 부풀지 않게
-      if (p.kind === 'brow' && POSE.browThick !== 1) {
+      if ((p.kind === 'brow' && POSE.browThick !== 1) || (p.kind === 'lash' && POSE.lashThick && POSE.lashThick !== 1)) {
         // 눈썹 메시가 얇아 가는 선처럼 보인다: 좌우 눈썹 각각 가운데 높이를 기준으로 위아래로 늘린다(아치 모양은 거의 그대로)
         for (const sd of [1, -1]) {
           const ids = [];
@@ -1372,7 +1583,8 @@ float armParam(vec3 p) {
           const B = 8, sum = new Float64Array(B), cnt = new Float64Array(B);
           const bin = (x) => Math.min(B - 1, Math.floor(((x - x0) / Math.max(1e-6, x1 - x0)) * B));
           for (const i of ids) { const b = bin(PP[i]); sum[b] += PP[i + 1]; cnt[b]++; }
-          for (const i of ids) { const b = bin(PP[i]); const cy = sum[b] / Math.max(1, cnt[b]); PP[i + 1] = cy + (PP[i + 1] - cy) * POSE.browThick; }
+          const th = p.kind === 'lash' ? POSE.lashThick : POSE.browThick;
+          for (const i of ids) { const b = bin(PP[i]); const cy = sum[b] / Math.max(1, cnt[b]); PP[i + 1] = cy + (PP[i + 1] - cy) * th; }
         }
       }
       if (p.kind === 'shoes') {
@@ -1425,7 +1637,7 @@ float armParam(vec3 p) {
         mat.customProgramCacheKey = () => 'shoe-sole'; // 신발 밑면이 새까만 띠로 보이지 않게
       }
       const mesh = new THREE.Mesh(g, mat);
-      mesh.castShadow = p.kind === 'hair' || p.kind === 'shoes';
+      mesh.castShadow = (p.kind === 'hair' && POSE.hairShadow !== false) || p.kind === 'shoes';
       mesh.receiveShadow = true;
       mesh.userData.kind = p.kind;
       mesh.renderOrder = p.kind === 'brow' || p.kind === 'lash' ? 2 : 1;
