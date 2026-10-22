@@ -383,7 +383,7 @@ def even_skin(src, dst):
     out = out * (1 + cheeks[..., None] * np.array([0.03, -0.01, -0.01], np.float32))
     # 입 안 조각(입술 안쪽·잇몸·혀): 피부색으로 펴면 다문 입술 사이가 밝은 줄로 보인다 → 원래 색을 어둡게 되돌린다
     mouth = np.zeros((H, W), bool)
-    mouth[720:940, 0:290] = True; mouth[1740:, 1540:1990] = True
+    mouth[720:940, 0:290] = True; mouth |= ((xx - 1724) / 182) ** 2 + ((yy - 1890) / 138) ** 2 < 1  # 오른쪽 아래 입 안 조각(바로 옆 손가락 끝은 빼기 - 손톱이 갈색으로 보이던 것)
     mouth &= m > 0
     out[mouth] = a[mouth] * 0.45
     Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), quality=88, optimize=True)
@@ -454,7 +454,7 @@ def clean_shoes(src, dst, size):
     blurL = np.asarray(Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(10 * size / 1024))).astype(np.float32) + 8
     detail = np.clip(lum / blurL, 0.4, 1.6)                       # 끈·구멍·패널 결
     base = np.clip(125 + blurL * 0.4, 0, 215)                     # 큰 밝기: 흰 갑피(조명에서 날아가지 않게 약간 낮게), 어두운 판·밑창은 중간 회색
-    l2 = np.clip(base * (0.72 + 0.35 * detail), 0, 245)
+    l2 = np.clip(base * (0.6 + 0.5 * detail), 0, 235)  # 끈·구멍·밑창 경계가 보이게 결 대비를 더
     a = np.repeat(l2[..., None], 3, -1) * np.array([1.0, 0.993, 0.98])
     f = size / 512
     y0, x0 = int(430 * f), int(388 * f)

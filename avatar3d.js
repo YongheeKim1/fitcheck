@@ -310,7 +310,7 @@ const Avatar3D = (() => {
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 7.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.35, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0 };
+  const POSE = { arm: 8.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.2, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0, toeOut: 5 };
   const HAND_CURL = { palmSign: -1, seg: [5, 11, 8], more: 1.6, close: 1, thumb: [10, 8, 8], thumbIn: -55, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
@@ -883,6 +883,18 @@ float armParam(vec3 p) {
         for (let i = 0; i < W.length; i++) if (W[i]) cmH[i * 3 + 1] -= (POSE.shoulderDrop + extra) * (W[i] / 255);
       }
     }
+    // 발끝을 바깥으로 조금(다리를 고관절 세로축으로 몇 도 돌린다): 차렷 마네킹 같은 평행 발 대신
+    if (POSE.toeOut) {
+      for (const [sd, sg] of [['L', 1], ['R', -1]]) {
+        const W = data.w['leg' + sd], c0 = jpos(cmH, `upperleg01.${sd}____head`), a = (sg * POSE.toeOut * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
+        for (let i = 0; i < W.length; i++) {
+          const w = W[i] / 255; if (!w) continue;
+          const x = cmH[i * 3] - c0[0], z = cmH[i * 3 + 2] - c0[2];
+          cmH[i * 3] += w * (c0[0] + x * ca + z * sa - cmH[i * 3]);
+          cmH[i * 3 + 2] += w * (c0[2] - x * sa + z * ca - cmH[i * 3 + 2]);
+        }
+      }
+    }
     const posed = poseLimbs(cmH, POSE.arm, POSE.leg, POSE.twist, POSE.fore);
     P = posed.P;
     const N = normals(P);
@@ -937,16 +949,12 @@ float armParam(vec3 p) {
           diffuseColor.rgb *= (1.0 - 0.4 * vHairOcc) * (1.0 - uCav * vCav) ; // 앞머리 아래 그늘 · 오목한 곳 그늘(따뜻한 쪽으로)
           diffuseColor.r += uCav * vCav * 0.04;
           {
-            // 피부 얼룩(1~2cm 크기, 밝기 ±3%): 밀랍처럼 고른 피부 대신
-            vec3 q = vRest;
-            float mot = sin(q.x * 3.7 + q.y * 1.3) * sin(q.y * 4.3 - q.z * 2.1) + 0.6 * sin(q.x * 6.1 - q.y * 5.3 + q.z * 3.3);
-            diffuseColor.rgb *= 1.0 + 0.02 * mot;
             // 쇄골: 목 밑에서 어깨 쪽으로 살짝 올라가는 선 아래로 옅은 그늘, 뼈 위는 조금 밝게(앞쪽만)
             float ax = abs(vRest.x);
             float line = uClav.y + 0.1 * ax - 0.004 * ax * ax;
             float d = line - vRest.y;
             float frontC = smoothstep(uClav.z - 4.0, uClav.z + 2.0, vRest.z) * (1.0 - smoothstep(13.0, 16.0, ax)) * smoothstep(1.5, 3.0, ax);
-            diffuseColor.rgb *= 1.0 - frontC * (0.07 * smoothstep(0.5, 1.0, d) * (1.0 - smoothstep(1.4, 2.4, d)) - 0.03 * (1.0 - smoothstep(0.0, 0.6, abs(d + 0.3))));
+            diffuseColor.rgb *= 1.0 - frontC * (0.13 * smoothstep(0.5, 1.1, d) * (1.0 - smoothstep(1.5, 2.8, d)) - 0.05 * (1.0 - smoothstep(0.0, 0.7, abs(d + 0.3))));
           }
           {
             float e = max(fwidth(vRest.y), 0.05);
