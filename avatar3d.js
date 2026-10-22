@@ -309,9 +309,9 @@ const Avatar3D = (() => {
     'cheek-vol': -0.6, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
   };
-  const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 7.8, fore: 0, leg: 2.5, twist: -18, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.2, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0, toeOut: 5, weight: 1.0 };
-  const HAND_CURL = { palmSign: -1, seg: [8, 14, 8], more: 0.6, close: -2.5, thumb: [40, 10, 10], thumbIn: -45, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
+  const LIGHT = { key: 2.6, fill: 0.25, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
+  const POSE = { arm: 7.4, fore: 0, leg: 2.5, twist: -18, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.2, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0, toeOut: 5, weight: 1.0, elbow: 7 };
+  const HAND_CURL = { palmSign: -1, seg: [8, 14, 8], more: 0.6, close: -6, thumb: [32, 10, 10], thumbIn: -38, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
   function normals(P) {
@@ -908,6 +908,19 @@ float armParam(vec3 p) {
         }
       }
     }
+    // 팔꿈치를 앞으로 조금 굽힌다(차렷한 막대 팔 대신): 아래팔을 팔꿈치 관절에서 앞쪽으로 돌린다
+    if (POSE.elbow) {
+      for (const sd of ['L', 'R']) {
+        const W = data.w['fore' + sd], el = jpos(cmH, `lowerarm01.${sd}____head`), sh = jpos(cmH, `upperarm01.${sd}____head`);
+        const arm = nrm3(sub3(el, sh)), ax = nrm3(crs3(arm, [0, 0, 1]));
+        const R = rodrigues(ax, POSE.elbow);
+        for (let i = 0; i < W.length; i++) {
+          const w = W[i] / 255; if (!w) continue;
+          const q = R(cmH[i * 3] - el[0], cmH[i * 3 + 1] - el[1], cmH[i * 3 + 2] - el[2]);
+          for (let k = 0; k < 3; k++) cmH[i * 3 + k] += w * (el[k] + q[k] - cmH[i * 3 + k]);
+        }
+      }
+    }
     const posed = poseLimbs(cmH, POSE.arm, POSE.leg, POSE.twist, POSE.fore);
     P = posed.P;
     const N = normals(P);
@@ -924,6 +937,7 @@ float armParam(vec3 p) {
     const tint = want.map((v, i) => Math.max(0.6, Math.min(1.35, v / data.skinAvg[i])));
     const skinMat = new THREE.MeshPhysicalMaterial({
       map: skinT, color: new THREE.Color(tint[0], tint[1], tint[2]).convertSRGBToLinear(),
+      side: THREE.DoubleSide, // 엄지 사이처럼 굽힌 곳의 아주 작은 틈으로 뒤(검은 속옷)가 점처럼 비치지 않게
       roughness: 0.63, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.9, 0.45, 0.38), clearcoat: 0.05, clearcoatRoughness: 0.6,
       ...(POSE.pores ? { bumpMap: poreTex(), bumpScale: POSE.pores } : {}), // 모공 결: 매끈한 플라스틱 피부 대신 빛이 잘게 흩어지게
     });
@@ -989,6 +1003,15 @@ float armParam(vec3 p) {
             diffuseColor.rgb = mix(diffuseColor.rgb, fab, briefM);
           }`)
         .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.92, briefM);')
+        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+          #if NUM_DIR_LIGHTS > 0
+          {
+            // 감싸는 빛: 빛과 그늘 경계를 넘어 살짝 붉은 주황빛이 번진다(피부 속 산란 흉내)
+            float ndl = dot(normal, directionalLights[0].direction);
+            float wrap = max(0.0, (ndl + 0.3) / 1.3) - max(0.0, ndl);
+            reflectedLight.directDiffuse += BRDF_Lambert(diffuseColor.rgb) * directionalLights[0].color * wrap * vec3(0.9, 0.45, 0.32) * (1.0 - briefM);
+          }
+          #endif`)
         .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\nmaterial.sheenColor *= 1.0 - briefM;\nmaterial.clearcoat *= 1.0 - briefM;');
     };
     const hairRGB = hexRGB(pc?.hair?.hex || '#1e1712');
@@ -1074,7 +1097,7 @@ float armParam(vec3 p) {
                 float e = max(fwidth(vWY), 0.02);
                 float sole = 1.0 - smoothstep(1.6 - e, 1.6 + e, vWY);
                 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.78, 0.77), sole);
-                diffuseColor.rgb *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.25, abs(vWY - 1.75)));
+                diffuseColor.rgb *= 1.0 - 0.5 * (1.0 - smoothstep(0.0, 0.18, abs(vWY - 1.7)));
                 diffuseColor.rgb *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.6, vWY));
               }`);
         };
@@ -1102,7 +1125,7 @@ float armParam(vec3 p) {
             const gk = g.clone(), pk = gk.attributes.position.array;
             for (let i = 0; i < pk.length; i++) pk[i] = pos[i] + nor[i] * off;
             gk.attributes.position.needsUpdate = true;
-            const mk = fringe(Object.assign(mat.clone(), { alphaMap: strandTex(), alphaTest: 0.3 + 0.12 * k, transparent: false, alphaToCoverage: true }));
+            const mk = fringe(Object.assign(mat.clone(), { alphaMap: strandTex(), alphaTest: 0.38 + 0.15 * k, transparent: false, alphaToCoverage: true }));
             mk.color = mat.color.clone().multiplyScalar(1 + 0.08 * k); // 바깥 가닥이 빛을 조금 더 받는다
             const sh = new THREE.Mesh(gk, mk);
             sh.userData.kind = 'hair'; sh.renderOrder = 1; sh.receiveShadow = true;
