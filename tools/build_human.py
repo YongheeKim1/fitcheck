@@ -454,8 +454,19 @@ def clean_shoes(src, dst, size):
     blurL = np.asarray(Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(10 * size / 1024))).astype(np.float32) + 8
     detail = np.clip(lum / blurL, 0.4, 1.6)                       # 끈·구멍·패널 결
     base = np.clip(125 + blurL * 0.4, 0, 215)                     # 큰 밝기: 흰 갑피(조명에서 날아가지 않게 약간 낮게), 어두운 판·밑창은 중간 회색
-    l2 = np.clip(base * (0.6 + 0.5 * detail), 0, 235)  # 끈·구멍·밑창 경계가 보이게 결 대비를 더
+    l2 = np.clip(base * (0.45 + 0.65 * detail), 0, 232)  # 끈·구멍·밑창 경계가 보이게 결 대비를 더
     a = np.repeat(l2[..., None], 3, -1) * np.array([1.0, 0.993, 0.98])
+    # 신발 앞(512 기준 좌표 × f): 끈·혀 자리 18% 어둡게, 혀의 하트 로고는 지우고, 앞코가 접히는 자리에 부드러운 주름 그늘
+    f2 = size / 1024
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32) / f2
+    def ellm(cx, cy, rx, ry, p=1.5):
+        d = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
+        return np.clip(1 - d, 0, 1) ** p
+    logo = ellm(500, 540, 46, 30, 0.3)[..., None]
+    a = a * (1 - logo) + np.median(a[int(560 * f2):int(600 * f2), int(440 * f2):int(560 * f2)].reshape(-1, 3), axis=0) * logo
+    a = a * (1 - 0.32 * ellm(495, 635, 125, 160, 0.7))[..., None]
+    crease = np.exp(-((yy - (780 + 0.0006 * (xx - 505) ** 2)) / 18) ** 2) * ((xx > 320) & (xx < 690))
+    a = a * (1 - 0.25 * crease)[..., None]
     f = size / 512
     y0, x0 = int(430 * f), int(388 * f)
     sock = a[y0:, x0:]

@@ -1112,10 +1112,10 @@ float armParam(vec3 p) {
               {
                 float e = max(fwidth(vWY), 0.02);
                 float sole = 1.0 - smoothstep(1.6 - e, 1.6 + e, vWY);
-                diffuseColor.rgb *= 0.92; // 옆판은 아주 옅은 회색
-                diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.78, 0.77), sole);
+                diffuseColor.rgb *= 0.72; // 갑피는 옅은 회색(흰 양말·밝은 중창과 구분)
+                diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92, 0.92, 0.91), sole);
                 diffuseColor.rgb *= 1.0 - 0.5 * (1.0 - smoothstep(0.0, 0.18, abs(vWY - 1.7)));
-                diffuseColor.rgb *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.6, vWY));
+                diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.55, 0.55, 0.54), 1.0 - smoothstep(0.0, 0.5, vWY)); // 밑창 바닥면은 새까맣지 않게 중간 회색
               }`);
         };
         mat.customProgramCacheKey = () => 'shoe-sole'; // 신발 밑면이 새까만 띠로 보이지 않게
