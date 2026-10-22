@@ -304,7 +304,7 @@ const Avatar3D = (() => {
     return P;
   }
   const FACE = {
-    'lowerlip-vol': -0.7, 'lowerlip-h': -0.3, 'lowerlip-mid': 0.8, 'upperlip-mid': -0.6, 'mouth-angle': 0.3, 'mouth-w': -0.1,
+    'lowerlip-vol': -0.8, 'lowerlip-h': -0.3, 'lowerlip-mid': 0.8, 'upperlip-mid': -0.6, 'mouth-angle': 0.45, 'mouth-w': -0.1,
     'chin-prom': 0.25, 'chin-w': -0.15, 'head-fat': -0.5, 'head-oval': 0,
     'cheek-vol': -0.6, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
@@ -475,7 +475,7 @@ const Avatar3D = (() => {
         const L = cells.get(key(cx + a, cy + b, cz + c)); if (!L) continue;
         for (const i of L) { const dx = H[i] - x, dy = H[i + 1] - y, dz = H[i + 2] - z; const q = dx * dx + dy * dy + dz * dz; if (q < d2) d2 = q; }
       }
-      const d = Math.sqrt(d2), t = Math.min(1, Math.max(0, (d - 0.15) / 0.9));
+      const d = Math.sqrt(d2), t = Math.min(1, Math.max(0, (d - 0.15) / 0.63)); // 머리카락에서 0.8cm 안(예전 1.05cm에서 30% 좁게)
       out[j] = 1 - t * t * (3 - 2 * t);
     }
     return out;
@@ -969,10 +969,10 @@ float armParam(vec3 p) {
       sleevePrint = a > 50 && p / a > 0.03;
     }
     // 몸판 가운데(무늬 아닌 바탕 천)의 사진 밝기(중앙값): 3D 결과 밝기를 상품 사진에 맞출 때 쓴다
-    let centerL = null;
+    let centerL = null, centerRGB = null;
     if (rb.torso?.length > 4) {
       const rows = fixRows(rb.torso), K = tex.kind === 'model' ? 5 : 0, rr = rows.slice(K);
-      const Ls = [];
+      const Ls = [], Cs = [[], [], []];
       const lumAt = (i) => lumOf(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
       for (let q = Math.floor(rr.length * 0.3); q <= Math.ceil(rr.length * 0.65) && q < rr.length; q++) {
         const [pa, pb2] = rr[q].map(P2), y = Math.round((pa[1] + pb2[1]) / 2);
@@ -981,14 +981,14 @@ float armParam(vec3 p) {
           for (let dy = -3; dy <= 3; dy++) {
             const yy = y + dy, i = yy * cw + x;
             if (x < 1 || x >= cw - 1 || yy < 1 || yy >= ch - 1 || !gar[i] || pm[i]) continue;
-            Ls.push(lumAt(i));
+            Ls.push(lumAt(i)); for (let q2 = 0; q2 < 3; q2++) Cs[q2].push(d[i * 4 + q2]);
           }
         }
       }
-      if (Ls.length > 50) { Ls.sort((p, q) => p - q); centerL = Ls[Ls.length >> 1]; }
+      if (Ls.length > 50) { Ls.sort((p, q) => p - q); centerL = Ls[Ls.length >> 1]; centerRGB = Cs.map((a3) => { a3.sort((p, q) => p - q); return a3[a3.length >> 1]; }); }
     }
     const res = {
-      centerL, medHex, cw, ch, out, wrapOut, blobs, hasWrap: nFull >= ch * 0.03, sleevePrint, maps: new Map(), med3: med,
+      centerL, centerRGB, medHex, cw, ch, out, wrapOut, blobs, hasWrap: nFull >= ch * 0.03, sleevePrint, maps: new Map(), med3: med,
       med: new THREE.Color(...med.map((v) => v / 255)).convertSRGBToLinear(),
       toUV: (p) => [(p.x - x0) / bw, 1 - (p.y - y0) / bh],
     };
@@ -1253,7 +1253,7 @@ float armParam(vec3 p) {
     const neckY = jpos(cmP, 'neck01____head')[1];
     const TAU = Math.PI * 2;
     U.uTopOn.value = 0; U.uBotOn.value = 0;
-    let topMat = null, topTarget = null, topPrint = null; // 상의 밝기 맞추기(상품 사진이 있을 때)
+    let topMat = null, topTarget = null, topRGB = null, topPrint = null; // 상의 밝기 맞추기(상품 사진이 있을 때)
     if (outfit.top?.g) {
       const g = outfit.top.g;
       const it = C.items[g.sleeve != null && g.sleeve > 40 ? 'longtee' : 'tee'];
@@ -1288,7 +1288,7 @@ float armParam(vec3 p) {
         }, cmP);
       }
       const mat = clothMaterial('top', { color: outfit.top.color, map: C.tex[it.name + '_ao.jpg'], bump: knitTex(), print: pt }, U);
-      if (pb?.centerL) { topMat = mat; topTarget = pb.centerL; topPrint = { ...pt, med3: pb.med3 }; }
+      if (pb?.centerL) { topMat = mat; topTarget = pb.centerL; topRGB = pb.centerRGB; topPrint = { ...pt, med3: pb.med3 }; }
       U.uZc.value = zcT;
       const mesh = clothMesh(it, P, cmP, ease, mat, U.uHem.value, radialT, zcT, printFn);
       U.uHemM.value = mesh.userData.ext.yMin; U.uSleeveM.value = mesh.userData.ext.sMax;
@@ -1362,18 +1362,27 @@ float armParam(vec3 p) {
       [topPrint.mapU.value, topPrint.wrapU.value] = keep;
       plain.dispose();
     } else full = X.shot();
-    // 상의 밝기 맞추기: 3D 조명 아래 몸판 가운데 밝기(중앙값)가 상품 사진 몸판 가운데(무늬 아닌 바탕 천) 밝기와 같아지게
+    // 상의 밝기·색감 맞추기: 3D 조명 아래 몸판 가운데 밝기(중앙값)가 상품 사진 몸판 가운데(무늬 아닌 바탕 천) 밝기와 같아지게
     // 색에 한 번 배율을 곱해 다시 그린다(3D 조명이 사진보다 가슴을 15% 안팎 어둡게 그린다)
     if (topMat && topTarget) {
       const sp = jpos(P, 'spine03____head'), y0 = Math.round(FLOOR - (sp[1] - 2) * X.s), y1 = Math.round(FLOOR - (sp[1] - 20) * X.s);
       const x0 = Math.round(CW / 2 - 7 * X.s), x1 = Math.round(CW / 2 + 7 * X.s);
-      const dd = full.getContext('2d').getImageData(x0, y0, x1 - x0, y1 - y0).data, Ls = [];
-      for (let i = 0; i < dd.length; i += 4) if (dd[i + 3] > 200) Ls.push(lumOf(dd[i], dd[i + 1], dd[i + 2]));
+      const dd = full.getContext('2d').getImageData(x0, y0, x1 - x0, y1 - y0).data, Ls = [], Cs = [[], [], []];
+      for (let i = 0; i < dd.length; i += 4) if (dd[i + 3] > 200) { Ls.push(lumOf(dd[i], dd[i + 1], dd[i + 2])); for (let q = 0; q < 3; q++) Cs[q].push(dd[i + q]); }
       if (Ls.length > 50) {
-        Ls.sort((p, q) => p - q);
-        const lin = (v) => Math.pow(Math.max(1, v) / 255, 2.2), gain = Math.min(topTarget < 60 ? 1.12 : 1.6, Math.max(0.8, lin(topTarget) / lin(Ls[Ls.length >> 1]))); // 검은 옷은 조금만(많이 밝히면 따뜻한 조명에 갈색으로 뜬다)
-        if (Math.abs(gain - 1) > 0.03) topMat.color.multiplyScalar(gain);
-        if (Math.abs(gain - 1) > 0.03 || topPrint) full = X.shot();
+        const medOf = (a3) => { a3.sort((p, q) => p - q); return a3[a3.length >> 1]; };
+        const lin = (v) => Math.pow(Math.max(1, v) / 255, 2.2), gain = Math.min(topTarget < 60 ? 1.12 : 1.6, Math.max(0.8, lin(topTarget) / lin(medOf(Ls)))); // 검은 옷은 밝기를 조금만
+        // 색감 맞추기: 채널마다 (상품/3D) 비를 밝기 비로 나눈 보정(0.9~1.12). 따뜻한 조명이 검은 옷을 갈색으로 띄우던 것.
+        // 무채색에 가까운 옷(OKLab 채도 0.03 미만)은 상품의 색감으로 완전히, 색 있는 옷은 60%만
+        const g3 = [1, 1, 1];
+        if (topRGB) {
+          const rg = Cs.map(medOf), gl = lin(lumOf(...topRGB)) / lin(lumOf(...rg));
+          const k = oklabC(topRGB.map((v) => v / 255))[1] < 0.03 ? 1 : 0.6;
+          for (let q = 0; q < 3; q++) g3[q] = Math.pow(Math.min(1.12, Math.max(0.9, (lin(topRGB[q]) / lin(rg[q])) / gl)), k);
+        }
+        const change = Math.abs(gain - 1) > 0.03 || g3.some((v) => Math.abs(v - 1) > 0.02);
+        if (change) { topMat.color.r *= gain * g3[0]; topMat.color.g *= gain * g3[1]; topMat.color.b *= gain * g3[2]; }
+        if (change || topPrint) full = X.shot();
       } else if (topPrint) full = X.shot();
     }
     meshes.forEach((o) => { scene.remove(o); o.geometry.dispose(); o.material.dispose(); });
@@ -1525,6 +1534,39 @@ float armParam(vec3 p) {
       briefU.uChin = { value: v3([0, chinY, jpos(cmP, 'neck01____head')[2]]) };
       briefU.uNip = { value: jpos(cmP, 'breast.L____head')[1] };
       briefU.uKnees = { value: [v3(jpos(cmP, 'lowerleg01.L____head')), v3(jpos(cmP, 'lowerleg01.R____head')), v3(jpos(cmP, 'lowerarm01.L____head')), v3(jpos(cmP, 'lowerarm01.R____head'))] };
+      // 눈꺼풀 가장자리 곡선(원래 자세 좌표): 윗속눈썹 뿌리(피부에 붙은 속눈썹 정점)에 2차 곡선 y = a x² + b x + c를 맞춘다.
+      // 셰이더가 픽셀마다 이 곡선까지의 거리로 속눈썹 선·쌍꺼풀 주름을 그린다(눈 주변 정점이 성겨 정점 속성·텍스처로는 가는 선이 안 나온다)
+      {
+        const lp = data.proxies.find((q) => q.kind === 'lash');
+        const A4 = [], X4 = [];
+        if (lp) {
+          const LP = proxyPos(lp, cmP), hw2 = data.w.head;
+          for (const sd of ['L', 'R']) {
+            const e = jpos(cmP, `eye.${sd}____head`);
+            const skin = [];
+            for (let i = 0; i < hw2.length; i++) if (hw2[i] > 100 && Math.hypot(cmP[i * 3] - e[0], cmP[i * 3 + 1] - e[1], cmP[i * 3 + 2] - e[2]) < 2.5) skin.push(i);
+            const R0 = [];
+            for (let v = 0; v < LP.length / 3; v++) {
+              const x = LP[v * 3], y = LP[v * 3 + 1], z = LP[v * 3 + 2];
+              if ((x - e[0]) * (sd === 'L' ? 1 : -1) < -2 || Math.abs(x - e[0]) > 2 || y < e[1] - 0.1) continue;
+              let d2 = Infinity; for (const i of skin) { const q = (cmP[i * 3] - x) ** 2 + (cmP[i * 3 + 1] - y) ** 2 + (cmP[i * 3 + 2] - z) ** 2; if (q < d2) d2 = q; }
+              if (d2 < 0.15 * 0.15) R0.push([x - e[0], y, z]);
+            }
+            if (R0.length < 5) { A4.push(new THREE.Vector4(0, 0, -999, 999)); X4.push(new THREE.Vector4(e[0], 0, 0, 0)); continue; }
+            // 최소제곱 2차식
+            let S = [0, 0, 0, 0, 0], T = [0, 0, 0];
+            for (const [x, y] of R0) { const p2 = [1, x, x * x, x * x * x, x * x * x * x]; for (let k = 0; k < 5; k++) S[k] += p2[k]; T[0] += y; T[1] += x * y; T[2] += x * x * y; }
+            const M = [[S[4], S[3], S[2]], [S[3], S[2], S[1]], [S[2], S[1], S[0]]], rhs = [T[2], T[1], T[0]];
+            const [qa, qb, qc] = solve(M, rhs);
+            const xs = R0.map((r) => r[0]), zAvg = R0.reduce((s2, r) => s2 + r[2], 0) / R0.length;
+            A4.push(new THREE.Vector4(qa, qb, qc, zAvg - 0.7));
+            X4.push(new THREE.Vector4(e[0], Math.min(...xs), Math.max(...xs), 0));
+          }
+        }
+        while (A4.length < 2) { A4.push(new THREE.Vector4(0, 0, -999, 999)); X4.push(new THREE.Vector4(0, 0, 0, 0)); }
+        briefU.uLidA = { value: A4 }; briefU.uLidX = { value: X4 };
+        briefU.uLidK = { value: new THREE.Vector2(POSE.lashLine ?? 0.6, POSE.crease ?? 0.3) };
+      }
     }
     briefU.uClav = { value: new THREE.Vector3(0, jpos(cmP, 'neck01____head')[1] - 4.2, jpos(cmP, 'neck01____head')[2]) };
     Object.assign(briefU, { uTopOn: { value: 0 }, uBotOn: { value: 0 }, uHem: { value: -1e3 }, uSleeve: { value: -1 }, uWaist: { value: -1e3 }, uPHem: { value: 1e3 }, uHemM: { value: -1e3 }, uSleeveM: { value: 100 }, uWaistM: { value: 1e3 }, uPHemM: { value: -1e3 }, uZc: { value: 0 }, ...clothArmUniforms(cmP) });
@@ -1533,15 +1575,29 @@ float armParam(vec3 p) {
       Object.assign(sh.uniforms, briefU);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nattribute float cav;\nattribute vec2 aCov;\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;\nvCav = cav;\nvCov = aCov;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nuniform vec3 uClav, uChin;\nuniform float uNip;\nuniform vec3 uKnees[4];\nfloat briefM;\n' + CLOTH_GLSL)
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nuniform vec3 uClav, uChin;\nuniform float uNip;\nuniform vec3 uKnees[4];\nuniform vec4 uLidA[2], uLidX[2];\nuniform vec2 uLidK;\nfloat briefM;\n' + CLOTH_GLSL)
         .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
           {
             if (uTopOn > 0.5 && vCov.x > 0.99) discard;
             if (uBotOn > 0.5 && vCov.y > 0.99) discard;
           }`)
         .replace('#include <map_fragment>', `#include <map_fragment>
-          diffuseColor.rgb *= (1.0 - 0.4 * vHairOcc) * (1.0 - uCav * vCav) ; // 앞머리 아래 그늘 · 오목한 곳 그늘(따뜻한 쪽으로)
+          diffuseColor.rgb *= mix(vec3(1.0), vec3(0.72, 0.64, 0.6), vHairOcc) * (1.0 - uCav * vCav) ; // 앞머리 아래 그늘(회색 띠로 보이지 않게 따뜻하게) · 오목한 곳 그늘
           diffuseColor.r += uCav * vCav * 0.04;
+          // 속눈썹 선(눈꺼풀 가장자리 바로 위 약 1mm, 짙게)·쌍꺼풀 주름(약 2.5mm 위, 옅게): 픽셀마다 곡선까지 세로 거리
+          for (int k = 0; k < 2; k++) {
+            vec4 LA = uLidA[k], LX = uLidX[k];
+            float lx = vRest.x - LX.x;
+            if (vRest.z > LA.w && lx > LX.y - 0.15 && lx < LX.z + 0.15) {
+              float lt = (lx - LX.y) / max(0.01, LX.z - LX.y);
+              lt = LX.x > 0.0 ? lt : 1.0 - lt; // 0 = 눈 안쪽(코 쪽), 1 = 바깥
+              float ld = vRest.y - (LA.x * lx * lx + LA.y * lx + LA.z);
+              float lline = smoothstep(-0.05, 0.0, ld) * (1.0 - smoothstep(0.08, 0.16, ld)) * smoothstep(0.0, 0.2, lt) * (1.0 - smoothstep(0.92, 1.08, lt));
+              float lcr = smoothstep(0.2, 0.28, ld) * (1.0 - smoothstep(0.32, 0.42, ld)) * smoothstep(0.12, 0.35, lt) * (1.0 - smoothstep(0.7, 0.95, lt));
+              diffuseColor.rgb *= 1.0 - uLidK.x * lline * vec3(0.9, 1.0, 1.05);
+              diffuseColor.rgb *= 1.0 - uLidK.y * lcr * vec3(0.9, 1.0, 1.05);
+            }
+          }
           {
             // 아주 낮은 주파수(약 5cm) 밝기 변화 ±2%: 고른 밀랍 피부 대신
             vec3 q = vRest;
