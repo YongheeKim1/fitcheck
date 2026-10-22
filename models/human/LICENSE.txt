@@ -10,4 +10,5 @@ CC0 1.0 Universal(퍼블릭 도메인)로 공개되어 있습니다.
 
 - 3D 옷(cloth/: 반팔·긴팔 티, 청바지 메시와 접힘·데님 결 지도): MakeHuman 시스템 옷 clothes/male_casualsuit04, male_casualsuit02 (CC0, 위 bundled assets)
 
+원본 받기: tools/fetch_makehuman.py(makehumancommunity/makehuman, dmaugis/makehuman-py3-assets → assets-src/makehuman, git 제외)
 변환 스크립트: tools/build_human.py

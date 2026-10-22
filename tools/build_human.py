@@ -1,10 +1,13 @@
 # MakeHuman(CC0) 자산 → 핏체크용 3D 인체 데이터(human.json + human.bin + 텍스처)
-# 사용: python -I build.py <dl 폴더> <출력 폴더>
+# 사용: python -P -X utf8 tools/build_human.py [원본 자산 폴더] [출력 폴더]
+#   원본 자산 기본값: 프로젝트/assets-src/makehuman(tools/fetch_makehuman.py로 받는다, git 제외), 출력 기본값: 프로젝트/models/human
 import sys, os, json, struct, re
 import numpy as np
 from PIL import Image
 
-DL, OUT = sys.argv[1], sys.argv[2]
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DL = sys.argv[1] if len(sys.argv) > 1 else os.path.join(_ROOT, 'assets-src', 'makehuman')
+OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(_ROOT, 'models', 'human')
 os.makedirs(OUT, exist_ok=True)
 P = lambda *a: os.path.join(DL, *a)
 
