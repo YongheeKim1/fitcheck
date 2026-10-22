@@ -310,8 +310,8 @@ const Avatar3D = (() => {
     'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
   };
   const LIGHT = { key: 2.6, fill: 0.3, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 8.5, fore: 0, leg: 2.5, twist: -8, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.2, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0, toeOut: 5 };
-  const HAND_CURL = { palmSign: -1, seg: [5, 11, 8], more: 1.6, close: 1, thumb: [10, 8, 8], thumbIn: -55, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
+  const POSE = { arm: 7.8, fore: 0, leg: 2.5, twist: -18, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.2, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0, toeOut: 5, weight: 1.0 };
+  const HAND_CURL = { palmSign: -1, seg: [8, 14, 8], more: 0.6, close: -2.5, thumb: [40, 10, 10], thumbIn: -45, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
   function normals(P) {
@@ -883,6 +883,19 @@ float armParam(vec3 p) {
         for (let i = 0; i < W.length; i++) if (W[i]) cmH[i * 3 + 1] -= (POSE.shoulderDrop + extra) * (W[i] / 255);
       }
     }
+    // 한쪽 다리에 체중(콘트라포스토): 골반을 화면 오른쪽으로 1cm 밀고(발은 그대로, 위로 갈수록 다시 가운데로) 2도 기울인다
+    if (POSE.weight) {
+      const hipY0 = jpos(cmH, 'upperleg01.L____head')[1], kneeY0 = jpos(cmH, 'lowerleg01.L____head')[1], chestY0 = jpos(cmH, 'breast.L____head')[1];
+      const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+      const tilt = Math.tan((POSE.weight * 2 * Math.PI) / 180);
+      for (let i = 0; i < cmH.length; i += 3) {
+        const y = cmH[i + 1];
+        const shift = POSE.weight * (y < hipY0 ? sm(4, hipY0, y) : 1 - 0.85 * sm(hipY0, chestY0, y));
+        const band = sm(kneeY0, hipY0, y) * (1 - sm(hipY0 + 8, chestY0, y));
+        cmH[i + 1] -= tilt * cmH[i] * band; // 체중 실은 쪽(x>0) 골반이 올라가고 반대쪽이 내려간다
+        cmH[i] += shift;
+      }
+    }
     // 발끝을 바깥으로 조금(다리를 고관절 세로축으로 몇 도 돌린다): 차렷 마네킹 같은 평행 발 대신
     if (POSE.toeOut) {
       for (const [sd, sg] of [['L', 1], ['R', -1]]) {
@@ -948,6 +961,11 @@ float armParam(vec3 p) {
         .replace('#include <map_fragment>', `#include <map_fragment>
           diffuseColor.rgb *= (1.0 - 0.4 * vHairOcc) * (1.0 - uCav * vCav) ; // 앞머리 아래 그늘 · 오목한 곳 그늘(따뜻한 쪽으로)
           diffuseColor.r += uCav * vCav * 0.04;
+          {
+            // 아주 낮은 주파수(약 5cm) 밝기 변화 ±2%: 고른 밀랍 피부 대신
+            vec3 q = vRest;
+            diffuseColor.rgb *= 1.0 + 0.02 * sin(q.x * 1.17 + q.y * 0.41 + 1.3) * sin(q.y * 0.93 - q.z * 0.71 + 0.4);
+          }
           {
             // 쇄골: 목 밑에서 어깨 쪽으로 살짝 올라가는 선 아래로 옅은 그늘, 뼈 위는 조금 밝게(앞쪽만)
             float ax = abs(vRest.x);
@@ -1046,7 +1064,21 @@ float armParam(vec3 p) {
       } else if (p.kind === 'eye') {
         mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.8, transparent: true, alphaTest: 0.02 }); // 소프트박스가 눈에 비친 반짝임
       } else {
-        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], roughness: 0.7, emissive: new THREE.Color(0.05, 0.05, 0.05) }); // 신발 밑면이 새까만 띠로 보이지 않게
+        mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], roughness: 0.7, emissive: new THREE.Color(0.05, 0.05, 0.05) });
+        // 운동화 중창: 바닥에서 1.6cm까지 밝은 회색 띠(위 경계는 또렷하게, 바로 위 얇은 그늘선)
+        mat.onBeforeCompile = (sh) => {
+          sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWY = (modelMatrix * vec4(transformed, 1.0)).y;');
+          sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWY;')
+            .replace('#include <map_fragment>', `#include <map_fragment>
+              {
+                float e = max(fwidth(vWY), 0.02);
+                float sole = 1.0 - smoothstep(1.6 - e, 1.6 + e, vWY);
+                diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.78, 0.77), sole);
+                diffuseColor.rgb *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.25, abs(vWY - 1.75)));
+                diffuseColor.rgb *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.6, vWY));
+              }`);
+        };
+        mat.customProgramCacheKey = () => 'shoe-sole'; // 신발 밑면이 새까만 띠로 보이지 않게
       }
       const mesh = new THREE.Mesh(g, mat);
       mesh.castShadow = p.kind === 'hair' || p.kind === 'shoes';
