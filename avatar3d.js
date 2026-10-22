@@ -307,10 +307,10 @@ const Avatar3D = (() => {
     'lowerlip-vol': -0.8, 'lowerlip-h': -0.3, 'lowerlip-mid': 0.8, 'upperlip-mid': -0.6, 'mouth-angle': 0.45, 'mouth-w': -0.1,
     'chin-prom': 0.25, 'chin-w': -0.15, 'head-fat': -0.5, 'head-oval': 0,
     'cheek-vol': -0.6, 'cheek-bones': 0, 'nose-w': -0.15, 'nose-point': -0.3, 'nose-flare': -0.3, 'nose-vol': -0.1, 'nose-hump': 0,
-    'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.3, 'eye-bag': -0.4, 'eye-scale': 0.12,
+    'brow-y': -0.15, 'brow-angle': 0, 'neck-w': 0.3, 'eye-open': 0.55, 'eye-bag': -0.4, 'eye-scale': 0.18,
   };
   const LIGHT = { key: 2.6, fill: 0.25, rim: 2.2, rim2: 1.6, env: 0.35, exposure: 0.84 };
-  const POSE = { arm: 7.4, fore: 0, leg: 2.5, twist: -18, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.2, lipClose: 0.2, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0, toeOut: 5, weight: 1.0, elbow: 7 };
+  const POSE = { arm: 7.4, fore: 0, leg: 2.5, twist: -18, head: 0.96, hairThick: 0.8, hair: 'short02', cav: 0.6, browThick: 1.55, hairShells: 3, hairShellGap: 0.16, hairNormal: 0, hairBump: 2.0, pores: 0.2, lipClose: 0.2, lipBack: 0.18, fringe: 4.2, headTilt: 1.5, shoulderDrop: 1.0, toeOut: 5, weight: 1.0, elbow: 7 };
   const HAND_CURL = { palmSign: -1, seg: [8, 14, 8], more: 0.6, close: -9, thumb: [18, 8, 8], thumbIn: -22, scale: 0.95 }; // 검지 10도 → 새끼 20도로 점점 더 굽힘, 엄지는 살짝 앞으로
 
   // 원래 정점 기준 법선(uv 이음매에서도 끊기지 않게)
@@ -496,6 +496,19 @@ const Avatar3D = (() => {
       done[i] = 1;
       const d = px - SX, w = Math.max(0, 1 - Math.abs(d) / 30) * (1 - e) ** 0.5;
       P[i * 3 + 1] += (d < 0 ? -1 : 1) * amt * w;
+    }
+  }
+
+  // 입술 뒤로: 입술 자리(피부 UV 타원) 가운데일수록 z를 뒤로 amt(cm). 오므려 내민 입 → 편안한 입
+  function lipBack(P, amt) {
+    const ref = data.body.ref, uv = data.body.uv, done = new Uint8Array(P.length / 3);
+    for (let j = 0; j < ref.length; j++) {
+      const i = ref[j]; if (done[i]) continue;
+      const px = uv[j * 2] * 2048, py = (1 - uv[j * 2 + 1]) * 2048;
+      const e = ((px - 1862) / 52) ** 2 + ((py - 1060) / 70) ** 2;
+      if (e > 1) continue;
+      done[i] = 1;
+      P[i * 3 + 2] -= amt * (1 - e) ** 0.7 * (1 - 0.5 * Math.abs(py - 1060) / 70);
     }
   }
 
@@ -1434,6 +1447,7 @@ float armParam(vec3 p) {
       }
     }
     if (POSE.lipClose) closeLips(cmH, POSE.lipClose);
+    if (POSE.lipBack) lipBack(cmH, POSE.lipBack);
     // 머리를 아주 조금(1.5도) 기울여 마네킹 같은 완전 대칭을 깬다(목 관절 중심, 머리 가중치만큼)
     if (POSE.headTilt) {
       const hw0 = data.w.head, c0 = jpos(cmH, 'neck03____head'), a = (POSE.headTilt * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
@@ -1565,17 +1579,38 @@ float armParam(vec3 p) {
         }
         while (A4.length < 2) { A4.push(new THREE.Vector4(0, 0, -999, 999)); X4.push(new THREE.Vector4(0, 0, 0, 0)); }
         briefU.uLidA = { value: A4 }; briefU.uLidX = { value: X4 };
-        briefU.uLidK = { value: new THREE.Vector2(POSE.lashLine ?? 0.6, POSE.crease ?? 0.3) };
+        briefU.uLidK = { value: new THREE.Vector2(POSE.lashLine ?? 0.8, POSE.crease ?? 0.3) };
+      }
+      // 얼굴 입체감(콧대·콧방울 옆면·광대·광대 아래·귀)에 쓸 기준점(원래 자세 좌표)
+      {
+        const hw3 = data.w.head, eyeY = (jpos(cmP, 'eye.L____head')[1] + jpos(cmP, 'eye.R____head')[1]) / 2;
+        let tip = null, earX = 0;
+        for (let i = 0; i < hw3.length; i++) {
+          if (hw3[i] < 240) continue;
+          const x = cmP[i * 3], y = cmP[i * 3 + 1], z = cmP[i * 3 + 2];
+          if (Math.abs(x) < 0.6 && y < eyeY && y > eyeY - 6 && (!tip || z > tip[2])) tip = [x, y, z];
+          if (Math.abs(y - eyeY) < 1.5) earX = Math.max(earX, Math.abs(x));
+        }
+        // 입 높이: 피부 UV의 입술 자리 정점 평균
+        const ref = data.body.ref, uv = data.body.uv; let my = 0, mn = 0;
+        for (let j = 0; j < ref.length; j++) {
+          const px = uv[j * 2] * 2048, py = (1 - uv[j * 2 + 1]) * 2048;
+          if (((px - 1862) / 46) ** 2 + ((py - 1060) / 62) ** 2 < 1) { my += cmP[ref[j] * 3 + 1]; mn++; }
+        }
+        tip = tip || [0, eyeY - 4, 0];
+        briefU.uFaceA = { value: new THREE.Vector4(eyeY, tip[1], tip[2], mn ? my / mn : tip[1] - 2.2) };
+        briefU.uFaceB = { value: new THREE.Vector4(earX - 2.2, POSE.faceShade ?? 1.6, 0, 0) };
       }
     }
     briefU.uClav = { value: new THREE.Vector3(0, jpos(cmP, 'neck01____head')[1] - 4.2, jpos(cmP, 'neck01____head')[2]) };
     Object.assign(briefU, { uTopOn: { value: 0 }, uBotOn: { value: 0 }, uHem: { value: -1e3 }, uSleeve: { value: -1 }, uWaist: { value: -1e3 }, uPHem: { value: 1e3 }, uHemM: { value: -1e3 }, uSleeveM: { value: 100 }, uWaistM: { value: 1e3 }, uPHemM: { value: -1e3 }, uZc: { value: 0 }, ...clothArmUniforms(cmP) });
     body.geometry.setAttribute('aCov', new THREE.BufferAttribute(new Float32Array(data.body.ref.length * 2), 2));
+    skinMat.customProgramCacheKey = () => 'skin-v2'; // 코드가 빌드 입력(얼굴 유무·POSE)에 따라 바뀌지 않게 하고 값은 유니폼으로. 코드가 달라지면 그 입력을 키에 넣는다
     skinMat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, briefU);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 restPos;\nattribute float hairOcc;\nattribute float cav;\nattribute vec2 aCov;\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = restPos;\nvHairOcc = hairOcc;\nvCav = cav;\nvCov = aCov;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nuniform vec3 uClav, uChin;\nuniform float uNip;\nuniform vec3 uKnees[4];\nuniform vec4 uLidA[2], uLidX[2];\nuniform vec2 uLidK;\nfloat briefM;\n' + CLOTH_GLSL)
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nvarying float vHairOcc;\nvarying float vCav;\nvarying vec2 vCov;\nuniform float uTop, uBot, uHalf, uCav;\nuniform vec3 uClav, uChin;\nuniform float uNip;\nuniform vec3 uKnees[4];\nuniform vec4 uLidA[2], uLidX[2];\nuniform vec2 uLidK;\nuniform vec4 uFaceA, uFaceB;\nfloat briefM;\n' + CLOTH_GLSL)
         .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
           {
             if (uTopOn > 0.5 && vCov.x > 0.99) discard;
@@ -1592,11 +1627,25 @@ float armParam(vec3 p) {
               float lt = (lx - LX.y) / max(0.01, LX.z - LX.y);
               lt = LX.x > 0.0 ? lt : 1.0 - lt; // 0 = 눈 안쪽(코 쪽), 1 = 바깥
               float ld = vRest.y - (LA.x * lx * lx + LA.y * lx + LA.z);
-              float lline = smoothstep(-0.05, 0.0, ld) * (1.0 - smoothstep(0.08, 0.16, ld)) * smoothstep(0.0, 0.2, lt) * (1.0 - smoothstep(0.92, 1.08, lt));
+              float lline = smoothstep(-0.05, 0.0, ld) * (1.0 - smoothstep(0.14, 0.24, ld)) * smoothstep(0.0, 0.2, lt) * (1.0 - smoothstep(0.92, 1.08, lt));
               float lcr = smoothstep(0.2, 0.28, ld) * (1.0 - smoothstep(0.32, 0.42, ld)) * smoothstep(0.12, 0.35, lt) * (1.0 - smoothstep(0.7, 0.95, lt));
               diffuseColor.rgb *= 1.0 - uLidK.x * lline * vec3(0.9, 1.0, 1.05);
               diffuseColor.rgb *= 1.0 - uLidK.y * lcr * vec3(0.9, 1.0, 1.05);
             }
+          }
+          {
+            // 얼굴 입체감(출력 크기에서도 남게 ±6~8%): 콧대는 밝게·콧방울 옆면은 어둡게, 광대는 밝게·그 아래 입꼬리 쪽은 어둡게
+            vec3 q = vRest; float fx = abs(q.x), K = uFaceB.y;
+            float ny = smoothstep(uFaceA.x - 0.3, uFaceA.x - 1.2, q.y) * smoothstep(uFaceA.y - 0.4, uFaceA.y + 0.6, q.y) * smoothstep(uFaceA.z - 2.6, uFaceA.z - 1.6, q.z);
+            float bridge = ny * (1.0 - smoothstep(0.25, 0.6, fx));
+            float nside = ny * smoothstep(0.55, 0.95, fx) * (1.0 - smoothstep(1.4, 2.0, fx));
+            float cf = smoothstep(uFaceA.z - 5.5, uFaceA.z - 3.5, q.z);
+            float chb = cf * (1.0 - smoothstep(0.8, 2.4, length(vec2(fx - 4.2, q.y - (uFaceA.x - 2.0)))));
+            float chs = cf * (1.0 - smoothstep(0.6, 2.4, length(vec2((fx - 3.6) * 0.8, q.y - (uFaceA.x - 0.55 * (uFaceA.x - uFaceA.w) - 1.6)))));
+            diffuseColor.rgb *= 1.0 + K * (0.06 * bridge - 0.07 * nside + 0.07 * chb - 0.08 * chs);
+            // 귀: 혈색 4% + 귀 안쪽 오목한 곳 그늘 더
+            float ear = smoothstep(uFaceB.x, uFaceB.x + 0.8, fx) * smoothstep(uFaceA.x - 4.5, uFaceA.x - 3.0, q.y) * (1.0 - smoothstep(uFaceA.x + 1.0, uFaceA.x + 2.5, q.y));
+            diffuseColor.rgb *= mix(vec3(1.0), vec3(1.04, 0.985, 0.975) * (1.0 - 0.6 * uCav * vCav), ear * K);
           }
           {
             // 아주 낮은 주파수(약 5cm) 밝기 변화 ±2%: 고른 밀랍 피부 대신
@@ -1717,7 +1766,7 @@ float armParam(vec3 p) {
       } else if (p.kind === 'brow' || p.kind === 'lash') {
         mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], color: p.kind === 'brow' ? new THREE.Color(Math.min(1, hairRGB[0] / 255 * 1.5), Math.min(1, hairRGB[1] / 255 * 1.5), Math.min(1, hairRGB[2] / 255 * 1.5)).convertSRGBToLinear() : new THREE.Color(0.06, 0.05, 0.045), roughness: 0.8, ...(p.kind === 'lash' && POSE.lashOpaque ? { alphaTest: 0.4 } : { transparent: true, opacity: p.kind === 'brow' ? 0.78 : 1, alphaTest: 0.05, depthWrite: false }), side: THREE.DoubleSide });
       } else if (p.kind === 'eye') {
-        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.8, transparent: true, alphaTest: 0.02 }); // 소프트박스가 눈에 비친 반짝임
+        mat = new THREE.MeshPhysicalMaterial({ map: data.tex[p.tex], emissiveMap: data.tex[p.tex], emissive: new THREE.Color(0.11, 0.1, 0.09), roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.8, transparent: true, alphaTest: 0.02 }); // 흰자가 눈두덩 그늘에 회색으로 죽지 않게 텍스처 밝기만큼 살짝 스스로 빛나게(홍채는 어두워 거의 그대로) // 소프트박스가 눈에 비친 반짝임
       } else {
         mat = new THREE.MeshStandardMaterial({ map: data.tex[p.tex], roughness: 0.7, emissive: new THREE.Color(0.05, 0.05, 0.05) });
         // 운동화 중창: 바닥에서 1.6cm까지 밝은 회색 띠(위 경계는 또렷하게, 바로 위 얇은 그늘선)
