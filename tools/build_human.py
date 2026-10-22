@@ -376,6 +376,9 @@ def even_skin(src, dst):
     # 입술 사이 선(닫힌 입술이 맞닿는 곳): 약 5px 폭을 15% 어둡게(입술이 한 덩어리로 내민 듯 보이지 않게)
     seam = np.clip(1 - np.abs(xx - 1862) / 2.5, 0, 1) * (((yy - 1060) / 58) ** 2 < 1) * np.clip(1 - ((yy - 1060) / 58) ** 2, 0, 1) ** 0.5
     out = out * (1 - 0.15 * seam[..., None])
+    # 아랫입술(입술 선 오른쪽 UV)이 윗입술보다 밝고 도톰해 보이던 것: 5% 어둡게
+    lower = lip[..., 0] * (xx > 1862)
+    out = out * (1 - 0.05 * lower[..., None])
     # 얼굴 조각 선명하게(언샤프 마스크, 반지름 약 1.5px, 0.6)와 볼·코 혈색 3%: 확대했을 때 흐릿한 밀랍처럼 보이지 않게
     hsel = ((xx > 1300) & (yy < 1760))[..., None].astype(np.float32)
     soft = blur(out, 2)
@@ -404,7 +407,7 @@ def dark_iris(src, dst, size):
         iris[..., 0] = np.maximum(iris[..., 0], np.clip((60 - d) / 4, 0, 1))
     mean = (rgb * iris).reshape(-1, 3).sum(0) / iris.sum()
     dark = rgb * (np.array([62, 38, 24], np.float32) / mean)  # 결은 남기고 짙은 갈색으로
-    sclera = np.minimum(255, rgb * 0.55 + np.array([233, 228, 222], np.float32) * 0.5)  # 흰자: 푸른 회색 대신 따뜻한 미색
+    sclera = np.minimum(255, rgb * 0.22 + np.array([237, 230, 219], np.float32) * 0.8)  # 흰자: 따뜻한 미색 (0.93,0.90,0.86) 쪽으로, 핏줄 결은 옅게만
     a[..., :3] = dark * iris + sclera * (1 - iris)
     Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(os.path.join(OUT, dst), optimize=True)
 

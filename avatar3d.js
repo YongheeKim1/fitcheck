@@ -509,6 +509,7 @@ const Avatar3D = (() => {
       if (e > 1) continue;
       done[i] = 1;
       P[i * 3 + 2] -= amt * (1 - e) ** 0.7 * (1 - 0.5 * Math.abs(py - 1060) / 70);
+      if (px > 1862) P[i * 3] *= 1 - 0.08 * (1 - e) ** 0.5; // 아랫입술(UV에서 입술 선 오른쪽)은 가로로 8% 좁게
     }
   }
 
@@ -1617,8 +1618,9 @@ float armParam(vec3 p) {
             if (uBotOn > 0.5 && vCov.y > 0.99) discard;
           }`)
         .replace('#include <map_fragment>', `#include <map_fragment>
-          diffuseColor.rgb *= mix(vec3(1.0), vec3(0.72, 0.64, 0.6), vHairOcc) * (1.0 - uCav * vCav) ; // 앞머리 아래 그늘(회색 띠로 보이지 않게 따뜻하게) · 오목한 곳 그늘
-          diffuseColor.r += uCav * vCav * 0.04;
+          // 따뜻한 그늘: 밝기를 d만큼 줄이되 색은 (0.88,0.80,0.76) 쪽으로(밝기 18% 줄일 때 그 색 그대로)
+          #define WARM_DARK(d) max(vec3(0.0), vec3(1.0) - vec3(0.12, 0.20, 0.24) * ((d) / 0.18))
+          diffuseColor.rgb *= mix(vec3(1.0), vec3(0.72, 0.64, 0.6), vHairOcc) * WARM_DARK(uCav * vCav); // 앞머리 아래 그늘 · 오목한 곳 그늘(따뜻하게)
           // 속눈썹 선(눈꺼풀 가장자리 바로 위 약 1mm, 짙게)·쌍꺼풀 주름(약 2.5mm 위, 옅게): 픽셀마다 곡선까지 세로 거리
           for (int k = 0; k < 2; k++) {
             vec4 LA = uLidA[k], LX = uLidX[k];
@@ -1627,7 +1629,7 @@ float armParam(vec3 p) {
               float lt = (lx - LX.y) / max(0.01, LX.z - LX.y);
               lt = LX.x > 0.0 ? lt : 1.0 - lt; // 0 = 눈 안쪽(코 쪽), 1 = 바깥
               float ld = vRest.y - (LA.x * lx * lx + LA.y * lx + LA.z);
-              float lline = smoothstep(-0.05, 0.0, ld) * (1.0 - smoothstep(0.14, 0.24, ld)) * smoothstep(0.0, 0.2, lt) * (1.0 - smoothstep(0.92, 1.08, lt));
+              float lline = smoothstep(0.0, 0.04, ld) * (1.0 - smoothstep(0.16, 0.26, ld)) * smoothstep(0.0, 0.2, lt) * (1.0 - smoothstep(0.92, 1.08, lt));
               float lcr = smoothstep(0.2, 0.28, ld) * (1.0 - smoothstep(0.32, 0.42, ld)) * smoothstep(0.12, 0.35, lt) * (1.0 - smoothstep(0.7, 0.95, lt));
               diffuseColor.rgb *= 1.0 - uLidK.x * lline * vec3(0.9, 1.0, 1.05);
               diffuseColor.rgb *= 1.0 - uLidK.y * lcr * vec3(0.9, 1.0, 1.05);
@@ -1642,7 +1644,8 @@ float armParam(vec3 p) {
             float cf = smoothstep(uFaceA.z - 5.5, uFaceA.z - 3.5, q.z);
             float chb = cf * (1.0 - smoothstep(0.8, 2.4, length(vec2(fx - 4.2, q.y - (uFaceA.x - 2.0)))));
             float chs = cf * (1.0 - smoothstep(0.6, 2.4, length(vec2((fx - 3.6) * 0.8, q.y - (uFaceA.x - 0.55 * (uFaceA.x - uFaceA.w) - 1.6)))));
-            diffuseColor.rgb *= 1.0 + K * (0.06 * bridge - 0.07 * nside + 0.07 * chb - 0.08 * chs);
+            // 밝은 곳(콧대 -10%: 카드 크기에서 T존이 번들거리지 않게, 광대)은 밝기만, 어두운 곳(콧방울 옆, 광대 아래 -30%)은 따뜻한 그늘
+            diffuseColor.rgb *= (1.0 + K * (0.054 * bridge + 0.07 * chb)) * WARM_DARK(K * (0.07 * nside + 0.056 * chs));
             // 귀: 혈색 4% + 귀 안쪽 오목한 곳 그늘 더
             float ear = smoothstep(uFaceB.x, uFaceB.x + 0.8, fx) * smoothstep(uFaceA.x - 4.5, uFaceA.x - 3.0, q.y) * (1.0 - smoothstep(uFaceA.x + 1.0, uFaceA.x + 2.5, q.y));
             diffuseColor.rgb *= mix(vec3(1.0), vec3(1.04, 0.985, 0.975) * (1.0 - 0.6 * uCav * vCav), ear * K);
@@ -1660,7 +1663,7 @@ float armParam(vec3 p) {
             float frontC = smoothstep(uClav.z - 4.0, uClav.z + 2.0, vRest.z) * (1.0 - smoothstep(13.0, 16.0, ax)) * smoothstep(1.5, 3.0, ax);
             // 턱 밑 목 앞쪽 그늘(턱 높이에서 1.5cm에 걸쳐 서서히: 딱 잘리면 목에 가로선), 가슴 아래 옅은 그늘, 무릎·팔꿈치 혈색 3%
             float jaw = (1.0 - smoothstep(1.0, 5.0, uChin.y - vRest.y)) * smoothstep(-0.5, 1.0, uChin.y - vRest.y) * (1.0 - smoothstep(4.0, 7.0, ax)) * smoothstep(uChin.z - 3.0, uChin.z + 1.0, vRest.z);
-            diffuseColor.rgb *= 1.0 - 0.12 * jaw;
+            diffuseColor.rgb *= WARM_DARK(0.12 * jaw);
             float pec = smoothstep(0.0, 1.2, uNip - 2.5 - vRest.y) * (1.0 - smoothstep(1.2, 3.5, uNip - 2.5 - vRest.y)) * smoothstep(3.0, 6.0, ax) * (1.0 - smoothstep(12.0, 15.0, ax)) * smoothstep(uClav.z - 2.0, uClav.z + 4.0, vRest.z);
             diffuseColor.rgb *= 1.0 - 0.07 * pec;
             float red = 0.0;
@@ -1682,7 +1685,9 @@ float armParam(vec3 p) {
             fab = mix(fab, vec3(0.32, 0.33, 0.36), stripe);
             diffuseColor.rgb = mix(diffuseColor.rgb, fab, briefM);
           }`)
-        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.92, briefM);')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.92, briefM);'
+          // T존(이마 가운데·콧대) 번들거림 10% 줄이기: 거칠기 +0.07
+          + '\nroughnessFactor = min(1.0, roughnessFactor + 0.07 * smoothstep(uFaceA.z - 4.0, uFaceA.z - 1.5, vRest.z) * (1.0 - smoothstep(1.2, 3.0, abs(vRest.x))) * smoothstep(uFaceA.y - 0.5, uFaceA.y + 1.0, vRest.y));')
         .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
           #if NUM_DIR_LIGHTS > 0
           {
@@ -1787,7 +1792,7 @@ float armParam(vec3 p) {
       }
       const mesh = new THREE.Mesh(g, mat);
       mesh.castShadow = (p.kind === 'hair' && POSE.hairShadow !== false) || p.kind === 'shoes';
-      mesh.receiveShadow = true;
+      mesh.receiveShadow = p.kind !== 'eye'; // 눈알은 눈두덩 그림자를 받지 않게(흰자가 보라빛 회색으로 죽던 것)
       mesh.userData.kind = p.kind;
       mesh.renderOrder = p.kind === 'brow' || p.kind === 'lash' ? 2 : 1;
       if (POSE.hide?.includes(p.kind)) mesh.visible = false; // 개발용
