@@ -3,12 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#1f2937">
+  <meta name="theme-color" content="#f2f4f6">
+  <meta name="color-scheme" content="light">
   <meta name="description" content="내 옷과 새 옷의 실측을 비교해 핏을 미리 예측하고, 내 몸 위에 입혀 보는 앱">
   <title>핏체크</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -352,9 +354,18 @@
   </main>
 
   <nav class="bottom-nav">
-    <button type="button" data-tab="compare" class="active">핏 비교</button>
-    <button type="button" data-tab="closet">옷장</button>
-    <button type="button" data-tab="body">내 체형</button>
+    <button type="button" data-tab="compare" class="active">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9.6 3.2a1 1 0 0 1 .9.4 1.9 1.9 0 0 0 3 0 1 1 0 0 1 .9-.4l4.2 1a1 1 0 0 1 .7.6l2.1 5a1 1 0 0 1-.5 1.3l-2.4 1.1V20a1 1 0 0 1-1 1H6.5a1 1 0 0 1-1-1v-7.8l-2.4-1.1a1 1 0 0 1-.5-1.3l2.1-5a1 1 0 0 1 .7-.6z"/></svg>
+      <span>핏 비교</span>
+    </button>
+    <button type="button" data-tab="closet">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3.2a2.8 2.8 0 0 0-2.8 2.8 1 1 0 0 0 2 0 .8.8 0 1 1 1.3.6l-1.1.9a1.9 1.9 0 0 0-.7 1.4v.4l-8.1 5.4A1.9 1.9 0 0 0 3.7 18h16.6a1.9 1.9 0 0 0 1.1-3.4l-8-5.3v-.2l1-.8A2.8 2.8 0 0 0 12 3.2z"/></svg>
+      <span>옷장</span>
+    </button>
+    <button type="button" data-tab="body">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.5" r="4" fill="currentColor"/><path fill="currentColor" d="M4 20.2C4 16.3 7.6 13.5 12 13.5s8 2.8 8 6.7a.8.8 0 0 1-.8.8H4.8a.8.8 0 0 1-.8-.8z"/></svg>
+      <span>내 체형</span>
+    </button>
   </nav>
 
   <!-- 라이브 카메라 -->
